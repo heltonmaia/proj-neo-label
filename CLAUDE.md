@@ -39,7 +39,7 @@ frontend/src/
   api/             # axios client + per-resource modules (auth, projects, ...)
   pages/           # routes: Login, Projects, ProjectDetail, Annotate (text/pose)
   features/        # domain components (auth, projects)
-  components/      # BabyAvatar (pose guide) + ui/
+  components/      # BabyAvatar / RodentAvatar (pose guides) + ui/
   stores/          # zustand (auth)
   lib/             # utils (env, download, keypoints)
   App.tsx          # routes  ·  main.tsx = providers (QueryClient, Router)
