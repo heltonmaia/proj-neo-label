@@ -44,16 +44,16 @@ frontend/src/
   lib/             # utils (env, download, keypoints)
   App.tsx          # routes  ·  main.tsx = providers (QueryClient, Router)
 
-run.py                   # Docker-first interactive dev menu
+run-dev.py               # Docker-first interactive dev menu (local only)
 docker-compose.yml       # dev stack (source mounted for hot-reload)
 docker-compose.prod.yml  # prod stack (built images, no source mount)
 deploy.sh                # VPS deploy: pull + rebuild + health-check
-monitor.py               # prod health/status probe
+monitor-prod.py          # prod health/status probe (VPS only)
 harden.sh                # one-shot VPS hardening (UFW, fail2ban, unattended-upgrades)
 backup.sh                # nightly tarball of DATA_DIR + secrets (run via root cron)
 ```
 
-Prod-only files (`docker-compose.prod.yml`, `deploy.sh`, `monitor.py`,
+Prod-only files (`docker-compose.prod.yml`, `deploy.sh`, `monitor-prod.py`,
 `harden.sh`, `backup.sh`) are for the VPS deploy — don't invoke them
 for local dev. See `CLAUDE.local.md` (gitignored, VPS notes) if present.
 
@@ -64,7 +64,7 @@ Data lives under `DATA_DIR` at runtime; see SPEC §3 for the on-disk shape.
 ### Dev loop (Docker, recommended)
 
 ```bash
-python run.py             # interactive menu (up/down/logs/status/tests)
+python run-dev.py         # interactive menu (up/down/logs/status/tests)
 docker compose up -d      # or start directly
 docker compose logs -f    # follow
 docker compose down       # stop
