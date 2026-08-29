@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 interface Annotator {
   id: number;
@@ -27,8 +27,12 @@ function blockSizes(total: number, n: number): number[] {
 /**
  * Per-video "split" control: pick annotators, preview the blocks, confirm.
  *
- * Selection order is meaningful — the first annotator picked gets the earliest
- * frames — so the picked list is kept as an array, not a Set.
+ * The picker is a centred dialog rather than a popover anchored to the button.
+ * Both places this control lives clip an absolutely-positioned child — the
+ * list view's table sits in `overflow-x-auto` and the grid card in
+ * `overflow-hidden` — so a popover was cut off at the section edge. The dialog
+ * escapes both, and is user-resizable (`resize` + a non-visible `overflow`)
+ * because a project can have far more annotators than fit a fixed box.
  */
 export function SplitVideoButton({
   sourceVideo,
@@ -49,23 +53,32 @@ export function SplitVideoButton({
   const nothingToSplit = unassigned === 0;
   const off = inFlight || disabled || nothingToSplit;
 
+  function close() {
+    setOpen(false);
+    setPicked([]);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') close();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   function toggle(id: number) {
     setPicked((prev) =>
       prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id],
     );
   }
 
-  function close() {
-    setOpen(false);
-    setPicked([]);
-  }
-
   return (
-    <span className="relative inline-flex items-center">
+    <>
       <button
         type="button"
         disabled={off}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(true)}
         className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-40 leading-none"
         title={
           nothingToSplit
@@ -101,39 +114,47 @@ export function SplitVideoButton({
       </button>
 
       {open && (
-        <>
-          {/* click-away backdrop */}
-          <div className="fixed inset-0 z-10" onClick={close} aria-hidden />
-          <div className="absolute right-0 top-full z-20 mt-1 w-72 rounded-lg border bg-white p-3 shadow-lg text-left">
-            <p className="text-xs font-medium text-slate-700">
-              Split "{sourceVideo}"
-            </p>
-            <p className="mt-0.5 text-[11px] text-slate-500">
-              {unassigned} unassigned {unassigned === 1 ? 'frame' : 'frames'} in
-              contiguous blocks, in the order you pick. Frames that already have
-              an annotator stay put.
-            </p>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+          onClick={close}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="split-title"
+            onClick={(e) => e.stopPropagation()}
+            // `resize` needs a non-visible overflow to take effect; the inner
+            // list does the scrolling, so hidden is right here.
+            className="flex flex-col resize overflow-hidden bg-white rounded-xl shadow-2xl ring-1 ring-slate-200
+                       w-[26rem] h-[26rem] min-w-[20rem] min-h-[16rem] max-w-[95vw] max-h-[90vh] text-left"
+          >
+            <div className="p-4 pb-2">
+              <h2 id="split-title" className="text-base font-semibold text-slate-900 truncate">
+                Split "{sourceVideo}"
+              </h2>
+              <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+                {unassigned} unassigned {unassigned === 1 ? 'frame' : 'frames'} into
+                contiguous blocks, in the order you pick — the first annotator gets
+                the earliest frames. Frames that already have an annotator stay put.
+              </p>
+            </div>
 
-            <div className="mt-2 max-h-44 overflow-y-auto rounded border">
+            <div className="flex-1 min-h-0 overflow-y-auto border-y mx-4">
               {users.length === 0 && (
-                <p className="p-2 text-[11px] text-slate-500">No users to assign to.</p>
+                <p className="p-3 text-xs text-slate-500">No users to assign to.</p>
               )}
               {users.map((u) => {
                 const at = picked.indexOf(u.id);
                 return (
                   <label
                     key={u.id}
-                    className="flex items-center gap-2 px-2 py-1.5 text-xs hover:bg-slate-50 cursor-pointer"
+                    className="flex items-center gap-2 px-2 py-2 text-sm hover:bg-slate-50 cursor-pointer"
                   >
-                    <input
-                      type="checkbox"
-                      checked={at !== -1}
-                      onChange={() => toggle(u.id)}
-                    />
+                    <input type="checkbox" checked={at !== -1} onChange={() => toggle(u.id)} />
                     <span className="flex-1 truncate">{u.username}</span>
                     {at !== -1 && (
-                      <span className="tabular-nums text-[11px] text-slate-500">
-                        {sizes[at]}
+                      <span className="tabular-nums text-xs text-slate-500 whitespace-nowrap">
+                        #{at + 1} · {sizes[at]}
                       </span>
                     )}
                   </label>
@@ -141,41 +162,47 @@ export function SplitVideoButton({
               })}
             </div>
 
-            {picked.length > 0 && (
-              <p className="mt-2 text-[11px] text-slate-600 tabular-nums">
-                {sizes.join(' · ')}
-                {sizes.some((s) => s === 0) && (
-                  <span className="text-amber-600">
-                    {' '}
-                    — fewer frames than annotators; some get none.
-                  </span>
-                )}
-              </p>
-            )}
-
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={close}
-                className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={picked.length === 0}
-                onClick={() => {
-                  onSplit(picked);
-                  close();
-                }}
-                className="rounded bg-slate-800 px-2 py-1 text-xs text-white hover:bg-slate-900 disabled:opacity-40"
-              >
-                Split
-              </button>
+            <div className="px-4 py-3">
+              {picked.length > 0 && (
+                <p className="mb-2 text-xs text-slate-600 tabular-nums break-words">
+                  {sizes.join(' · ')}
+                  {sizes.some((s) => s === 0) && (
+                    <span className="text-amber-600">
+                      {' '}
+                      — fewer frames than annotators; some get none.
+                    </span>
+                  )}
+                </p>
+              )}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-400 select-none">
+                  Drag the corner to resize
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={close}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={picked.length === 0}
+                    onClick={() => {
+                      onSplit(picked);
+                      close();
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Split
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </>
+        </div>
       )}
-    </span>
+    </>
   );
 }
