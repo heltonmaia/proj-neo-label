@@ -364,6 +364,21 @@ accepted anywhere in the system anymore.
 - `PATCH  /projects/{id}/videos/{source}/assign` — admin-only;
   reassigns every frame of the video. Body `{"assignee_id": null}`
   clears the assignment.
+- `POST   /projects/{id}/videos/{source}/split` — admin-only; splits the
+  video's **unassigned** frames into contiguous blocks, one per
+  annotator. Body `{"assignee_ids": [<id>, ...]}`. Frames already
+  carrying an `assigned_to` are left untouched and counted as
+  `skipped`, so the blocks are contiguous within the unassigned subset
+  rather than the whole video. The free frames are ordered by
+  `payload.frame_index` (falling back to item id) and cut into equal
+  blocks, any remainder going to the earliest blocks — 100 frames
+  across 3 annotators yields 34/33/33. Returns
+  `{"assigned": <int>, "skipped": <int>, "blocks": [{"assignee_id",
+  "count", "first_frame", "last_frame"}]}`. 404 if the video has no
+  frames in the project; 409 if it has frames but none unassigned;
+  400 if an `assignee_id` does not exist; 422 on an empty list or
+  duplicate ids. Reassigning an already-annotated frame does not lose
+  the annotation — see §3.
 - `POST   /projects/{id}/videos/{source}/rotate` — admin-only; rotates
   every extracted frame of the video in place and transforms the
   existing keypoint annotations to match. Body `{"degrees": 90|180|270}`

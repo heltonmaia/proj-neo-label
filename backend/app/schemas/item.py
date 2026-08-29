@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ItemStatus(str, enum.Enum):
@@ -37,6 +37,22 @@ class ReassignRequest(BaseModel):
 
 class RotateRequest(BaseModel):
     degrees: int  # 90 (clockwise), 180, or 270 (counter-clockwise)
+
+
+class VideoSplitIn(BaseModel):
+    """Annotators to divide a video's unassigned frames between.
+
+    Order is meaningful: the first id receives the earliest block of frames.
+    """
+
+    assignee_ids: list[int] = Field(min_length=1)
+
+    @field_validator("assignee_ids")
+    @classmethod
+    def _reject_duplicates(cls, v: list[int]) -> list[int]:
+        if len(set(v)) != len(v):
+            raise ValueError("assignee_ids must not name the same annotator twice")
+        return v
 
 
 class ItemReviewIn(BaseModel):

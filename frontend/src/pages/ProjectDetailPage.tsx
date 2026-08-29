@@ -22,8 +22,9 @@ import {
   type OutlierItem,
 } from '@/api/items';
 import { listUsers } from '@/api/users';
-import { deleteVideo, importCocoPose, importImages, listVideos, reassignVideo, rotateVideo, uploadVideo } from '@/api/videos';
+import { deleteVideo, importCocoPose, importImages, listVideos, reassignVideo, rotateVideo, splitVideo, uploadVideo } from '@/api/videos';
 import { VideoRotateButtons } from '@/features/projects/VideoRotateButtons';
+import { SplitVideoButton } from '@/features/projects/SplitVideoButton';
 import type { CocoImportResult, ImageImportResult, ResizeMode } from '@/api/videos';
 import { downloadExport, type ExportFormat } from '@/lib/download';
 import { frameUrl } from '@/lib/frameUrl';
@@ -254,6 +255,18 @@ export default function ProjectDetailPage() {
   const reassign = useMutation({
     mutationFn: (p: { source: string; assigneeId: number | null }) =>
       reassignVideo(projectId, p.source, p.assigneeId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['items', projectId] });
+      qc.invalidateQueries({ queryKey: ['videos', projectId] });
+    },
+  });
+
+  const [splittingVideo, setSplittingVideo] = useState<string | null>(null);
+  const splitMut = useMutation({
+    mutationFn: (p: { source: string; assigneeIds: number[] }) =>
+      splitVideo(projectId, p.source, p.assigneeIds),
+    onMutate: ({ source }) => setSplittingVideo(source),
+    onSettled: () => setSplittingVideo(null),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['items', projectId] });
       qc.invalidateQueries({ queryKey: ['videos', projectId] });
@@ -1751,6 +1764,16 @@ export default function ProjectDetailPage() {
                         )}
                       </button>
                     )}
+                    <SplitVideoButton
+                      sourceVideo={v.source_video}
+                      unassigned={v.unassigned}
+                      users={usersQ.data ?? []}
+                      inFlight={splittingVideo === v.source_video}
+                      disabled={splitMut.isPending}
+                      onSplit={(assigneeIds) =>
+                        splitMut.mutate({ source: v.source_video, assigneeIds })
+                      }
+                    />
                     <VideoRotateButtons
                       inFlight={rotatingVideo === v.source_video}
                       disabled={rotateMut.isPending}
@@ -1893,6 +1916,16 @@ export default function ProjectDetailPage() {
                           </button>
                         );
                       })()}
+                    <SplitVideoButton
+                      sourceVideo={v.source_video}
+                      unassigned={v.unassigned}
+                      users={usersQ.data ?? []}
+                      inFlight={splittingVideo === v.source_video}
+                      disabled={splitMut.isPending}
+                      onSplit={(assigneeIds) =>
+                        splitMut.mutate({ source: v.source_video, assigneeIds })
+                      }
+                    />
                     <VideoRotateButtons
                       inFlight={rotatingVideo === v.source_video}
                       disabled={rotateMut.isPending}

@@ -5,7 +5,23 @@ export interface VideoSummary {
   frames: number;
   done: number;       // annotated (done + reviewed combined)
   reviewed: number;   // strict subset that's been signed off
+  unassigned: number; // frames still in the admin pool
+  // null means unassigned OR mixed — after a split a video is mixed, so read
+  // `unassigned` to tell the two apart.
   assigned_to: number | null;
+}
+
+export interface SplitBlock {
+  assignee_id: number;
+  count: number;
+  first_frame: number | null;
+  last_frame: number | null;
+}
+
+export interface SplitResult {
+  assigned: number;
+  skipped: number;
+  blocks: SplitBlock[];
 }
 
 export type ResizeMode = 'stretch' | 'pad';
@@ -50,6 +66,21 @@ export async function reassignVideo(
   const { data } = await api.patch<{ reassigned: number; assignee_id: number | null }>(
     `/projects/${projectId}/videos/${encodeURIComponent(sourceVideo)}/assign`,
     { assignee_id: assigneeId },
+  );
+  return data;
+}
+
+/** Divide a video's unassigned frames into contiguous blocks, one per
+ *  annotator, in the order given. Frames that already have an owner are
+ *  left untouched. */
+export async function splitVideo(
+  projectId: number,
+  sourceVideo: string,
+  assigneeIds: number[],
+) {
+  const { data } = await api.post<SplitResult>(
+    `/projects/${projectId}/videos/${encodeURIComponent(sourceVideo)}/split`,
+    { assignee_ids: assigneeIds },
   );
   return data;
 }

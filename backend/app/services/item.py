@@ -69,10 +69,17 @@ def videos_in_project(project_id: int) -> list[dict]:
                 "frames": 0,
                 "done": 0,
                 "reviewed": 0,
+                "unassigned": 0,
                 "assigned_to": item.get("assigned_to"),
             },
         )
         g["frames"] += 1
+        # How many frames are still in the admin pool. `assigned_to: None`
+        # alone can't say — it means "unassigned OR mixed", and after a split
+        # a video is mixed. This is what tells the two apart, and it is what
+        # the split UI previews block sizes from.
+        if item.get("assigned_to") is None:
+            g["unassigned"] += 1
         # `done` is "annotated" (counts both done and reviewed) — kept as-is
         # for the existing progress bar UI. `reviewed` is the strict subset
         # that's been signed off by admin/owner, so the UI can compute
@@ -100,6 +107,72 @@ def reassign_video(project_id: int, source_video: str, assignee_id: int | None) 
         storage.save_item(item)
         count += 1
     return count
+
+
+def _even_chunks(seq: list, n: int) -> Iterator[list]:
+    """Cut `seq` into n contiguous chunks, the remainder going to the earliest
+    ones — 100 items across 3 chunks is 34/33/33, and nothing is dropped."""
+    base, extra = divmod(len(seq), n)
+    start = 0
+    for i in range(n):
+        size = base + (1 if i < extra else 0)
+        yield seq[start : start + size]
+        start += size
+
+
+def split_video(
+    project_id: int, source_video: str, assignee_ids: list[int]
+) -> dict | None:
+    """Divide `source_video`'s **unassigned** frames into contiguous blocks,
+    one per annotator, in frame order.
+
+    Frames that already have an owner are left untouched and counted as
+    `skipped`, so the blocks are contiguous within the free pool rather than
+    within the whole video: split a half-assigned source and the blocks will
+    have gaps in the global frame numbering. That is the deliberate trade for
+    never yanking work out from under an annotator.
+
+    Returns None when the source has no items at all, which the caller turns
+    into a 404 the way `reassign_video` does. A source that exists but has
+    nothing free comes back with `assigned: 0` and empty blocks.
+    """
+    in_source = [
+        item
+        for item in storage.list_items(project_id)
+        if (item.get("payload") or {}).get("source_video") == source_video
+    ]
+    if not in_source:
+        return None
+
+    free = [item for item in in_source if item.get("assigned_to") is None]
+    free.sort(key=lambda i: ((i.get("payload") or {}).get("frame_index") or 0, i["id"]))
+
+    blocks: list[dict] = []
+    assigned = 0
+    for assignee_id, chunk in zip(assignee_ids, _even_chunks(free, len(assignee_ids))):
+        for item in chunk:
+            item["assigned_to"] = assignee_id
+            storage.save_item(item)
+        assigned += len(chunk)
+        idxs = [
+            (i.get("payload") or {}).get("frame_index")
+            for i in chunk
+            if (i.get("payload") or {}).get("frame_index") is not None
+        ]
+        blocks.append(
+            {
+                "assignee_id": assignee_id,
+                "count": len(chunk),
+                "first_frame": idxs[0] if idxs else None,
+                "last_frame": idxs[-1] if idxs else None,
+            }
+        )
+
+    return {
+        "assigned": assigned,
+        "skipped": len(in_source) - len(free),
+        "blocks": blocks,
+    }
 
 
 def delete_video(project_id: int, source_video: str) -> int:
