@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createProject, deleteProject, listProjects, KeypointSchema } from '@/api/projects';
 import { listUsers } from '@/api/users';
+import { userLabel } from '@/lib/userLabel';
 import { me } from '@/api/auth';
 import { useAuth } from '@/stores/auth';
 import { useConfirm } from '@/components/ui/ConfirmDialog';
@@ -103,7 +104,7 @@ export default function ProjectsPage() {
             <option value="all">All users</option>
             {(usersQ.data ?? []).map((u) => (
               <option key={u.id} value={u.id}>
-                {u.username} ({u.role})
+                {userLabel(u)} ({u.role})
               </option>
             ))}
           </select>

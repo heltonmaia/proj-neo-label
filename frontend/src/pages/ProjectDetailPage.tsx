@@ -25,6 +25,7 @@ import { listUsers } from '@/api/users';
 import { deleteVideo, importCocoPose, importImages, listVideos, reassignVideo, rotateVideo, splitVideo, uploadVideo } from '@/api/videos';
 import { VideoRotateButtons } from '@/features/projects/VideoRotateButtons';
 import { SplitVideoButton } from '@/features/projects/SplitVideoButton';
+import { userLabel } from '@/lib/userLabel';
 import type { CocoImportResult, ImageImportResult, ResizeMode } from '@/api/videos';
 import { downloadExport, type ExportFormat } from '@/lib/download';
 import { frameUrl } from '@/lib/frameUrl';
@@ -1024,7 +1025,7 @@ export default function ProjectDetailPage() {
                 <option value="">— leave unassigned —</option>
                 {(usersQ.data ?? []).map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.username} ({u.role})
+                    {userLabel(u)} ({u.role})
                   </option>
                 ))}
               </select>
@@ -1352,7 +1353,7 @@ export default function ProjectDetailPage() {
               <option value="">— leave unassigned —</option>
               {(usersQ.data ?? []).map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.username} ({u.role})
+                  {userLabel(u)} ({u.role})
                 </option>
               ))}
             </select>
@@ -1501,7 +1502,7 @@ export default function ProjectDetailPage() {
               <option value="">— leave unassigned —</option>
               {(usersQ.data ?? []).map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.username} ({u.role})
+                  {userLabel(u)} ({u.role})
                 </option>
               ))}
             </select>
@@ -1644,7 +1645,7 @@ export default function ProjectDetailPage() {
                   <option value="unassigned">— unassigned —</option>
                   {(usersQ.data ?? []).map((u) => (
                     <option key={u.id} value={u.id}>
-                      {u.username}
+                      {userLabel(u)}
                     </option>
                   ))}
                 </select>
@@ -1733,7 +1734,7 @@ export default function ProjectDetailPage() {
                       <option value="">— unassigned —</option>
                       {(usersQ.data ?? []).map((u) => (
                         <option key={u.id} value={u.id}>
-                          {u.username}
+                          {userLabel(u)}
                         </option>
                       ))}
                     </select>
@@ -1877,7 +1878,7 @@ export default function ProjectDetailPage() {
                       <option value="">— unassigned —</option>
                       {(usersQ.data ?? []).map((u) => (
                         <option key={u.id} value={u.id}>
-                          {u.username}
+                          {userLabel(u)}
                         </option>
                       ))}
                     </select>

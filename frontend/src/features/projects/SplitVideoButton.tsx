@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 
+import { userLabel } from '@/lib/userLabel';
+
 interface Annotator {
   id: number;
   username: string;
+  email?: string | null;
 }
 
 interface Props {
@@ -151,7 +154,7 @@ export function SplitVideoButton({
                     className="flex items-center gap-2 px-2 py-2 text-sm hover:bg-slate-50 cursor-pointer"
                   >
                     <input type="checkbox" checked={at !== -1} onChange={() => toggle(u.id)} />
-                    <span className="flex-1 truncate">{u.username}</span>
+                    <span className="flex-1 truncate" title={userLabel(u)}>{userLabel(u)}</span>
                     {at !== -1 && (
                       <span className="tabular-nums text-xs text-slate-500 whitespace-nowrap">
                         #{at + 1} · {sizes[at]}
