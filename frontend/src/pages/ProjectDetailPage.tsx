@@ -1390,10 +1390,15 @@ export default function ProjectDetailPage() {
               <div className="min-w-0">
                 <h2 className="font-semibold">Import COCO keypoints dataset</h2>
                 <p className="text-xs text-slate-500">
-                  Drop a COCO JSON keypoints ZIP (e.g. Roboflow "COCO JSON" export).
-                  The importer walks for <code>_annotations.coco.json</code> files
-                  and creates one item per image; images referenced by a COCO
-                  annotation are imported as already-annotated (17 keypoints).
+                  Drop a ZIP holding both the images (JPG/PNG) and their COCO
+                  keypoints JSON — the JSON must sit in the same folder as the
+                  images it references. Any <code>.json</code> with{' '}
+                  <code>images</code> and <code>annotations</code> works (e.g.
+                  Roboflow's <code>_annotations.coco.json</code>); a{' '}
+                  <code>train</code>/<code>valid</code>/<code>test</code> layout
+                  becomes one source per split. One item per image, kept at its
+                  original size; images carrying a COCO annotation arrive
+                  already-annotated (17 keypoints), the rest as pending.
                 </p>
               </div>
               <svg
@@ -1437,7 +1442,8 @@ export default function ProjectDetailPage() {
                 Click to choose a COCO keypoints ZIP
               </span>
               <span className="text-xs text-slate-500">
-                Roboflow "COCO JSON" pose export works directly
+                Images + their .json in the same folder — Roboflow "COCO JSON"
+                pose export works directly
               </span>
               <input
                 type="file"
