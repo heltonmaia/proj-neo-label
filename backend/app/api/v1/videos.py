@@ -98,6 +98,8 @@ async def import_coco_pose(
             else status.HTTP_400_BAD_REQUEST
         )
         raise HTTPException(code, str(e))
+    except RuntimeError as e:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e))
 
 
 @router.post(

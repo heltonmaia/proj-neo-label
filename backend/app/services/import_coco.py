@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -53,6 +54,7 @@ _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 _MAX_ZIP_BYTES = 500 * 1024 * 1024    # 500 MiB — same cap as video upload
 _CHUNK_BYTES = 1024 * 1024            # 1 MiB
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+_JPEG_SUFFIXES = {".jpg", ".jpeg"}
 
 
 def _safe_name(name: str) -> str:
@@ -75,6 +77,33 @@ def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         with zf.open(member) as src, open(target, "wb") as out:
             shutil.copyfileobj(src, out)
+
+
+def _write_jpeg_frame(src: Path, dest: Path) -> None:
+    """Place `src` into the frames dir as JPEG, converting when it isn't one.
+
+    Every frame must be a JPEG. The exporters read each image's dimensions
+    with a JPEG-only SOF probe (`item.py::_jpeg_size`), and a frame it cannot
+    measure is skipped by `eligible_pose_items` without a word — so a PNG
+    frame imports and annotates fine but vanishes from every export. Unlike
+    the raw-image importer this path must NOT resize: the COCO keypoints are
+    in the source's own pixel space.
+
+    JPEG sources are copied byte-for-byte to avoid a pointless re-encode.
+    """
+    if src.suffix.lower() in _JPEG_SUFFIXES:
+        shutil.copy2(src, dest)
+        return
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "warning", "-i", str(src), "-q:v", "2", str(dest)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg failed converting {src.name}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
 
 
 def _find_split(path: Path) -> str | None:
@@ -251,9 +280,8 @@ def import_coco_pose(
 
                 frames_dir = pdir / "frames" / source_name
                 frames_dir.mkdir(parents=True, exist_ok=True)
-                suffix = src_img.suffix.lower()
-                dest = frames_dir / f"f_{frame_idx:06d}{suffix}"
-                shutil.copy2(src_img, dest)
+                dest = frames_dir / f"f_{frame_idx:06d}.jpg"
+                _write_jpeg_frame(src_img, dest)
                 rel = dest.relative_to(storage._root())
 
                 img_w = int(img.get("width") or 0)
