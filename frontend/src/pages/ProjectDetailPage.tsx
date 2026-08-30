@@ -25,7 +25,7 @@ import { listUsers } from '@/api/users';
 import { deleteVideo, importCocoPose, importImages, listVideos, reassignVideo, rotateVideo, splitVideo, uploadVideo } from '@/api/videos';
 import { VideoRotateButtons } from '@/features/projects/VideoRotateButtons';
 import { SplitVideoButton } from '@/features/projects/SplitVideoButton';
-import { userLabel } from '@/lib/userLabel';
+import { assignableOptions, userLabel } from '@/lib/userLabel';
 import type { CocoImportResult, ImageImportResult, ResizeMode } from '@/api/videos';
 import { downloadExport, type ExportFormat } from '@/lib/download';
 import { frameUrl } from '@/lib/frameUrl';
@@ -1023,7 +1023,7 @@ export default function ProjectDetailPage() {
                 className="border rounded px-2 py-1.5 text-sm w-full"
               >
                 <option value="">— leave unassigned —</option>
-                {(usersQ.data ?? []).map((u) => (
+                {assignableOptions(usersQ.data ?? []).map((u) => (
                   <option key={u.id} value={u.id}>
                     {userLabel(u)} ({u.role})
                   </option>
@@ -1351,7 +1351,7 @@ export default function ProjectDetailPage() {
               className="border rounded px-2 py-1.5 text-sm w-full sm:w-64"
             >
               <option value="">— leave unassigned —</option>
-              {(usersQ.data ?? []).map((u) => (
+              {assignableOptions(usersQ.data ?? []).map((u) => (
                 <option key={u.id} value={u.id}>
                   {userLabel(u)} ({u.role})
                 </option>
@@ -1500,7 +1500,7 @@ export default function ProjectDetailPage() {
               className="border rounded px-2 py-1.5 text-sm w-full sm:w-64"
             >
               <option value="">— leave unassigned —</option>
-              {(usersQ.data ?? []).map((u) => (
+              {assignableOptions(usersQ.data ?? []).map((u) => (
                 <option key={u.id} value={u.id}>
                   {userLabel(u)} ({u.role})
                 </option>
@@ -1732,7 +1732,7 @@ export default function ProjectDetailPage() {
                       className="border rounded px-2 py-1 text-xs flex-1 min-w-0"
                     >
                       <option value="">— unassigned —</option>
-                      {(usersQ.data ?? []).map((u) => (
+                      {assignableOptions(usersQ.data ?? [], v.assigned_to).map((u) => (
                         <option key={u.id} value={u.id}>
                           {userLabel(u)}
                         </option>
@@ -1768,7 +1768,7 @@ export default function ProjectDetailPage() {
                     <SplitVideoButton
                       sourceVideo={v.source_video}
                       unassigned={v.unassigned}
-                      users={usersQ.data ?? []}
+                      users={assignableOptions(usersQ.data ?? [])}
                       inFlight={splittingVideo === v.source_video}
                       disabled={splitMut.isPending}
                       onSplit={(assigneeIds) =>
@@ -1876,7 +1876,7 @@ export default function ProjectDetailPage() {
                       className="border rounded px-2 py-1 text-sm"
                     >
                       <option value="">— unassigned —</option>
-                      {(usersQ.data ?? []).map((u) => (
+                      {assignableOptions(usersQ.data ?? [], v.assigned_to).map((u) => (
                         <option key={u.id} value={u.id}>
                           {userLabel(u)}
                         </option>
@@ -1920,7 +1920,7 @@ export default function ProjectDetailPage() {
                     <SplitVideoButton
                       sourceVideo={v.source_video}
                       unassigned={v.unassigned}
-                      users={usersQ.data ?? []}
+                      users={assignableOptions(usersQ.data ?? [])}
                       inFlight={splittingVideo === v.source_video}
                       disabled={splitMut.isPending}
                       onSplit={(assigneeIds) =>
