@@ -25,6 +25,10 @@ import { listUsers } from '@/api/users';
 import { deleteVideo, importCocoPose, importImages, listVideos, reassignVideo, rotateVideo, splitVideo, uploadVideo } from '@/api/videos';
 import { VideoRotateButtons } from '@/features/projects/VideoRotateButtons';
 import { SplitVideoButton } from '@/features/projects/SplitVideoButton';
+import { ReassignAnnotatorButton } from '@/features/projects/ReassignAnnotatorButton';
+import type { Holder } from '@/features/projects/ReassignAnnotatorButton';
+import { AnnotatorDepartureButton } from '@/features/projects/AnnotatorDepartureButton';
+import type { AffectedVideo, DepartureProgress } from '@/features/projects/AnnotatorDepartureButton';
 import { assignableOptions, userLabel } from '@/lib/userLabel';
 import type { CocoImportResult, ImageImportResult, ResizeMode } from '@/api/videos';
 import { downloadExport, type ExportFormat } from '@/lib/download';
@@ -261,6 +265,96 @@ export default function ProjectDetailPage() {
       qc.invalidateQueries({ queryKey: ['videos', projectId] });
     },
   });
+
+  // Who holds frames of which video, and how many are still open. Computed
+  // from the items already in memory: `listVideos` reports a single
+  // `assigned_to` per video, which goes null the moment a video is split, so
+  // it cannot answer "how much of this does Ana still owe us".
+  const holdersByVideo = useMemo(() => {
+    const UNFINISHED = new Set(['pending', 'in_progress']);
+    const m = new Map<string, Map<number, Holder>>();
+    for (const i of itemsQ.data?.items ?? []) {
+      if (i.assigned_to == null) continue;
+      const src = (i.payload as { source_video?: string }).source_video;
+      if (!src) continue;
+      let byUser = m.get(src);
+      if (!byUser) m.set(src, (byUser = new Map()));
+      const h = byUser.get(i.assigned_to) ?? { id: i.assigned_to, unfinished: 0, total: 0 };
+      h.total += 1;
+      if (UNFINISHED.has(i.status)) h.unfinished += 1;
+      byUser.set(i.assigned_to, h);
+    }
+    return m;
+  }, [itemsQ.data]);
+
+  const holdersOf = (source: string): Holder[] =>
+    [...(holdersByVideo.get(source)?.values() ?? [])];
+
+  const projectHolderIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const byUser of holdersByVideo.values()) {
+      for (const id of byUser.keys()) ids.add(id);
+    }
+    return [...ids];
+  }, [holdersByVideo]);
+
+  const affectedFor = (annotatorId: number): AffectedVideo[] => {
+    const out: AffectedVideo[] = [];
+    for (const [sourceVideo, byUser] of holdersByVideo) {
+      const h = byUser.get(annotatorId);
+      if (h) out.push({ sourceVideo, unfinished: h.unfinished, total: h.total });
+    }
+    return out.sort((a, b) => a.sourceVideo.localeCompare(b.sourceVideo));
+  };
+
+  const [reassigningVideo, setReassigningVideo] = useState<string | null>(null);
+  const reassignFrom = useMutation({
+    mutationFn: (p: {
+      source: string;
+      fromId: number;
+      toId: number | null;
+      onlyUnfinished: boolean;
+    }) =>
+      reassignVideo(projectId, p.source, p.toId, {
+        fromAssigneeId: p.fromId,
+        onlyUnfinished: p.onlyUnfinished,
+      }),
+    onMutate: ({ source }) => setReassigningVideo(source),
+    onSettled: () => setReassigningVideo(null),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['items', projectId] });
+      qc.invalidateQueries({ queryKey: ['videos', projectId] });
+    },
+  });
+
+  // The departure sweep. The endpoint is per-video, so this walks the affected
+  // videos in sequence; a failure is recorded and the walk continues, because
+  // stopping would leave the admin unable to tell which videos were done.
+  const [departure, setDeparture] = useState<DepartureProgress | null>(null);
+  async function runDeparture(p: {
+    fromId: number;
+    toId: number | null;
+    onlyUnfinished: boolean;
+    videos: string[];
+  }) {
+    setDeparture({ done: 0, of: p.videos.length, moved: 0, failed: [] });
+    let moved = 0;
+    const failed: string[] = [];
+    for (const [n, source] of p.videos.entries()) {
+      try {
+        const r = await reassignVideo(projectId, source, p.toId, {
+          fromAssigneeId: p.fromId,
+          onlyUnfinished: p.onlyUnfinished,
+        });
+        moved += r.reassigned;
+      } catch {
+        failed.push(source);
+      }
+      setDeparture({ done: n + 1, of: p.videos.length, moved, failed: [...failed] });
+    }
+    qc.invalidateQueries({ queryKey: ['items', projectId] });
+    qc.invalidateQueries({ queryKey: ['videos', projectId] });
+  }
 
   const [splittingVideo, setSplittingVideo] = useState<string | null>(null);
   const splitMut = useMutation({
@@ -1604,7 +1698,8 @@ export default function ProjectDetailPage() {
                   </span>
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Reassigning moves every frame of a video to the selected user.
+                  The dropdown moves every frame of a video. To move just one
+                  annotator's frames, use the handover button on its row.
                 </p>
               </div>
               <svg
@@ -1624,6 +1719,13 @@ export default function ProjectDetailPage() {
             </summary>
             <div className="px-4 pb-4 pt-3 border-t space-y-3">
               <div className="flex items-center gap-2 flex-wrap justify-end">
+                <AnnotatorDepartureButton
+                  users={usersQ.data ?? []}
+                  affectedFor={affectedFor}
+                  holderIds={projectHolderIds}
+                  progress={departure}
+                  onRun={runDeparture}
+                />
                 <input
                   type="search"
                   value={videoQuery}
@@ -1765,6 +1867,21 @@ export default function ProjectDetailPage() {
                         )}
                       </button>
                     )}
+                    <ReassignAnnotatorButton
+                      sourceVideo={v.source_video}
+                      holders={holdersOf(v.source_video)}
+                      users={assignableOptions(usersQ.data ?? [])}
+                      inFlight={reassigningVideo === v.source_video}
+                      disabled={reassignFrom.isPending}
+                      onReassign={({ fromId, toId, onlyUnfinished }) =>
+                        reassignFrom.mutate({
+                          source: v.source_video,
+                          fromId,
+                          toId,
+                          onlyUnfinished,
+                        })
+                      }
+                    />
                     <SplitVideoButton
                       sourceVideo={v.source_video}
                       unassigned={v.unassigned}
@@ -1917,6 +2034,21 @@ export default function ProjectDetailPage() {
                           </button>
                         );
                       })()}
+                    <ReassignAnnotatorButton
+                      sourceVideo={v.source_video}
+                      holders={holdersOf(v.source_video)}
+                      users={assignableOptions(usersQ.data ?? [])}
+                      inFlight={reassigningVideo === v.source_video}
+                      disabled={reassignFrom.isPending}
+                      onReassign={({ fromId, toId, onlyUnfinished }) =>
+                        reassignFrom.mutate({
+                          source: v.source_video,
+                          fromId,
+                          toId,
+                          onlyUnfinished,
+                        })
+                      }
+                    />
                     <SplitVideoButton
                       sourceVideo={v.source_video}
                       unassigned={v.unassigned}

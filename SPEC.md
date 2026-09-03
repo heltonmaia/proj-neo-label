@@ -362,8 +362,32 @@ accepted anywhere in the system anymore.
 - `GET    /projects/{id}/videos` — admin overview (per-video
   `frames`, `done`, `assigned_to` — `null` when unassigned or mixed)
 - `PATCH  /projects/{id}/videos/{source}/assign` — admin-only;
-  reassigns every frame of the video. Body `{"assignee_id": null}`
-  clears the assignment.
+  reassigns frames of the video. Body
+  `{"assignee_id": <id>|null, "from_assignee_id": <id>|null,
+  "only_unfinished": <bool>}`; `assignee_id: null` returns the frames to
+  the unassigned pool. The two filters are optional and default to off,
+  so a body carrying only `assignee_id` still moves **every** frame:
+  - `from_assignee_id` — move only frames currently owned by that user.
+    Note `null` here means *no filter*, **not** "currently unassigned";
+    to hand out unassigned frames use `/split`.
+  - `only_unfinished` — move only `pending` and `in_progress` frames,
+    leaving `done` and `reviewed` with their current owner. Because
+    `send_back` sets an item to `in_progress` (see §2), frames returned
+    by curation count as unfinished and do move.
+
+  Together they express "annotator X left: give what they had not
+  finished to Y (or back to the pool), and leave the work they completed
+  credited to them". Returns `{"reassigned": <int>, "assignee_id": ...}`.
+  400 if either id does not exist; **404** if the video has no frames in
+  the project; **409** if it has frames but none matched the filters.
+
+  An **unfinished** annotation follows its item to the new owner: the
+  file is rewritten as `<iid>__<new_uid>.json` with `annotator_id`
+  updated, so the new assignee inherits the partial work as a starting
+  point and the item keeps exactly one annotation file. A `done` or
+  `reviewed` annotation is left under its original author, preserving
+  credit — reassigning it changes only who may edit the item, and the
+  existing annotation stays visible through the lookup fallback in §3.
 - `POST   /projects/{id}/videos/{source}/split` — admin-only; splits the
   video's **unassigned** frames into contiguous blocks, one per
   annotator. Body `{"assignee_ids": [<id>, ...]}`. Frames already

@@ -58,14 +58,35 @@ export async function listVideos(projectId: number) {
   return data;
 }
 
+export interface ReassignFilters {
+  /** Move only frames this annotator currently owns. Omit for "any owner" —
+   *  note the backend reads `null` as *no filter*, not "unassigned". */
+  fromAssigneeId?: number | null;
+  /** Move only `pending` / `in_progress` frames, leaving finished work with
+   *  its current owner. Frames sent back by curation count as unfinished. */
+  onlyUnfinished?: boolean;
+}
+
+/**
+ * Reassign frames of one video. Unfiltered this moves the whole video; with
+ * filters it is the "an annotator left" operation — hand over what they had
+ * not finished and leave their completed work credited to them.
+ *
+ * Throws 404 if the video has no frames, 409 if the filters matched none.
+ */
 export async function reassignVideo(
   projectId: number,
   sourceVideo: string,
   assigneeId: number | null,
+  filters: ReassignFilters = {},
 ) {
   const { data } = await api.patch<{ reassigned: number; assignee_id: number | null }>(
     `/projects/${projectId}/videos/${encodeURIComponent(sourceVideo)}/assign`,
-    { assignee_id: assigneeId },
+    {
+      assignee_id: assigneeId,
+      ...(filters.fromAssigneeId != null && { from_assignee_id: filters.fromAssigneeId }),
+      ...(filters.onlyUnfinished && { only_unfinished: true }),
+    },
   );
   return data;
 }

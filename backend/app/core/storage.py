@@ -228,6 +228,31 @@ def find_any_annotation_for_item(pid: int, iid: int) -> dict | None:
     return candidates[0]
 
 
+def move_annotation(pid: int, iid: int, from_uid: int, to_uid: int) -> bool:
+    """Re-home an item's annotation to a new author. Returns whether it moved.
+
+    Used when an *unfinished* item changes hands: the new assignee inherits the
+    partial work, and the item keeps exactly ONE annotation file. That single
+    file is the invariant that matters — `eligible_pose_items` and the outlier
+    scan both collapse annotations into a dict keyed by item id, so a second
+    file would make which one wins depend on glob order.
+
+    Writes the new file before removing the old, so an interruption leaves a
+    harmless duplicate rather than losing the annotation. A pre-existing file
+    under `to_uid` is stale by construction (the app reads and writes the
+    *owner's* file, and the owner is `from_uid`) and is overwritten.
+    """
+    if from_uid == to_uid:
+        return False
+    record = _read_json(_ann_path(pid, iid, from_uid), None)
+    if record is None:
+        return False
+    record["annotator_id"] = to_uid
+    _write_json(_ann_path(pid, iid, to_uid), record)
+    _ann_path(pid, iid, from_uid).unlink(missing_ok=True)
+    return True
+
+
 def save_annotation(pid: int, annotation: dict) -> None:
     _write_json(_ann_path(pid, annotation["item_id"], annotation["annotator_id"]), annotation)
 

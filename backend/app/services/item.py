@@ -94,19 +94,55 @@ def videos_in_project(project_id: int) -> list[dict]:
     return sorted(groups.values(), key=lambda g: g["source_video"])
 
 
-def reassign_video(project_id: int, source_video: str, assignee_id: int | None) -> int:
-    """Reassign every frame of `source_video` to `assignee_id` (None = unassign).
+#: Statuses that count as "not finished" for `only_unfinished`. Note that
+#: `review_item`'s `send_back` parks an item at `in_progress`, so frames the
+#: curator returned are unfinished work and do move.
+_UNFINISHED = {ItemStatus.pending.value, ItemStatus.in_progress.value}
 
-    Returns count updated.
+
+def reassign_video(
+    project_id: int,
+    source_video: str,
+    assignee_id: int | None,
+    from_assignee_id: int | None = None,
+    only_unfinished: bool = False,
+) -> tuple[int, int]:
+    """Reassign frames of `source_video` to `assignee_id` (None = unassign).
+
+    Both filters default to off, which is the original "move everything"
+    behavior. `from_assignee_id` restricts the move to frames that annotator
+    currently owns; `only_unfinished` to frames not yet `done`/`reviewed`. The
+    pair expresses the case this exists for: an annotator stops working, so
+    what they had not finished goes to someone else while the work they
+    completed stays credited to them.
+
+    An unfinished item's annotation follows it (see `storage.move_annotation`)
+    so the new assignee inherits the partial work and the item keeps one
+    annotation file. A finished annotation is deliberately left under its
+    original author — reassigning completed work changes who may edit it, not
+    who did it.
+
+    Returns `(moved, total_in_source)`. The caller needs both to tell a video
+    that isn't there (404) from filters that matched nothing (409).
     """
-    count = 0
+    moved = 0
+    total = 0
     for item in storage.list_items(project_id):
         if (item.get("payload") or {}).get("source_video") != source_video:
             continue
+        total += 1
+        previous = item.get("assigned_to")
+        if from_assignee_id is not None and previous != from_assignee_id:
+            continue
+        unfinished = item.get("status") in _UNFINISHED
+        if only_unfinished and not unfinished:
+            continue
         item["assigned_to"] = assignee_id
         storage.save_item(item)
-        count += 1
-    return count
+        if unfinished and previous is not None and assignee_id is not None:
+            storage.move_annotation(project_id, item["id"], previous, assignee_id)
+        moved += 1
+    return moved, total
 
 
 def _even_chunks(seq: list, n: int) -> Iterator[list]:

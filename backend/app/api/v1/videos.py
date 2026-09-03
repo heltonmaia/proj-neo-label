@@ -157,13 +157,34 @@ def reassign_video(
     data: ReassignRequest,
     current_user: AdminUser,
 ) -> dict:
+    """Move frames of this video to another annotator, or back to the pool.
+
+    Unfiltered this reassigns the whole video (the original behavior). With
+    `from_assignee_id` / `only_unfinished` it becomes the "an annotator left"
+    operation — see ReassignRequest.
+    """
     _require_project(project_id)
     if data.assignee_id is not None:
         _require_user(data.assignee_id)
-    count = item_service.reassign_video(project_id, source_video, data.assignee_id)
-    if count == 0:
+    if data.from_assignee_id is not None:
+        # Validate rather than let a typo'd id quietly match no frame and
+        # surface as "nothing to move".
+        _require_user(data.from_assignee_id)
+    moved, total = item_service.reassign_video(
+        project_id,
+        source_video,
+        data.assignee_id,
+        from_assignee_id=data.from_assignee_id,
+        only_unfinished=data.only_unfinished,
+    )
+    if total == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Video not found in project")
-    return {"reassigned": count, "assignee_id": data.assignee_id}
+    if moved == 0:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "No frame of this video matched the filters — nothing to reassign",
+        )
+    return {"reassigned": moved, "assignee_id": data.assignee_id}
 
 
 @router.post(

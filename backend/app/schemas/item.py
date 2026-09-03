@@ -32,7 +32,18 @@ class ItemRead(BaseModel):
 
 
 class ReassignRequest(BaseModel):
+    """Move frames of one video to `assignee_id` (None = back to the pool).
+
+    Both filters default to off, so a body carrying only `assignee_id` moves
+    every frame — the original behavior.
+
+    `from_assignee_id=None` means **no filter**, NOT "currently unassigned";
+    handing out unassigned frames is what `/split` is for.
+    """
+
     assignee_id: int | None = None
+    from_assignee_id: int | None = None
+    only_unfinished: bool = False
 
 
 class RotateRequest(BaseModel):
