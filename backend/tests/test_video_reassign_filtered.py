@@ -199,76 +199,20 @@ def test_item_sent_back_by_curation_counts_as_unfinished(
 
 # --- the annotation-follows rule -------------------------------------------
 
-def test_unfinished_annotation_follows_to_the_new_owner(
+def test_reassigning_never_rewrites_annotation_authorship(
     client, admin_headers, project
 ):
-    """One file per item is the invariant: the partial work is rewritten under
-    the new owner rather than left beside a file they will create on save."""
+    """`annotator_id` records who did the work. Reassignment changes who may
+    edit an item, not who annotated it — including for unfinished work, which
+    an admin may hand around several times while it is being fixed."""
     a = _annotator(client, admin_headers, "ann-a")
     c = _annotator(client, admin_headers, "ann-c")
-    (iid,) = _seed(
+    unfinished, finished = _seed(
         client, admin_headers, project["id"],
-        [{"owner": a, "status": "in_progress", "annotation": True}],
-    )
-
-    r = _reassign(
-        client, admin_headers, project["id"],
-        {"assignee_id": c, "from_assignee_id": a, "only_unfinished": True},
-    )
-
-    assert r.status_code == 200, r.text
-    assert _ann_files(project["id"], iid) == [f"{iid}__{c}.json"]
-    moved = storage.load_annotation(project["id"], iid, c)
-    assert moved["annotator_id"] == c
-    assert moved["value"] == {"keypoints": [[1, 2, 2]]}
-
-
-def test_round_trip_does_not_leave_a_stale_second_file(
-    client, admin_headers, project
-):
-    """An item handed back to someone who held it before must still end with
-    one file. The record being moved is the live one — the item's owner is who
-    the app reads and writes — so a leftover from the earlier stint loses."""
-    a = _annotator(client, admin_headers, "ann-a")
-    c = _annotator(client, admin_headers, "ann-c")
-    (iid,) = _seed(
-        client, admin_headers, project["id"],
-        [{"owner": a, "status": "in_progress", "annotation": True}],
-    )
-    # c held this item earlier and left a file behind.
-    storage.save_annotation(
-        project["id"],
-        {
-            "id": storage.next_id("annotations"),
-            "item_id": iid,
-            "annotator_id": c,
-            "value": {"keypoints": [[9, 9, 1]]},
-            "created_at": "2025-01-01T00:00:00",
-            "updated_at": "2025-01-01T00:00:00",
-        },
-    )
-
-    r = _reassign(
-        client, admin_headers, project["id"],
-        {"assignee_id": c, "from_assignee_id": a, "only_unfinished": True},
-    )
-
-    assert r.status_code == 200, r.text
-    assert _ann_files(project["id"], iid) == [f"{iid}__{c}.json"]
-    assert storage.load_annotation(project["id"], iid, c)["value"] == {
-        "keypoints": [[1, 2, 2]]
-    }
-
-
-def test_finished_annotation_keeps_its_original_author(
-    client, admin_headers, project
-):
-    """Reassigning completed work changes who may edit it, not who did it."""
-    a = _annotator(client, admin_headers, "ann-a")
-    c = _annotator(client, admin_headers, "ann-c")
-    (iid,) = _seed(
-        client, admin_headers, project["id"],
-        [{"owner": a, "status": "done", "annotation": True}],
+        [
+            {"owner": a, "status": "in_progress", "annotation": True},
+            {"owner": a, "status": "done", "annotation": True},
+        ],
     )
 
     r = _reassign(
@@ -277,8 +221,29 @@ def test_finished_annotation_keeps_its_original_author(
     )
 
     assert r.status_code == 200, r.text
-    assert _ann_files(project["id"], iid) == [f"{iid}__{a}.json"]
-    assert storage.load_annotation(project["id"], iid, a)["annotator_id"] == a
+    for iid in (unfinished, finished):
+        assert _ann_files(project["id"], iid) == [f"{iid}__{a}.json"]
+        assert storage.load_annotation(project["id"], iid, a)["annotator_id"] == a
+
+
+def test_new_owner_still_sees_the_previous_annotation(client, admin_headers, project):
+    """Leaving the file under its author is only safe because the lookup falls
+    back to it — the new assignee must still inherit the partial work."""
+    a = _annotator(client, admin_headers, "ann-a")
+    c = _annotator(client, admin_headers, "ann-c")
+    (iid,) = _seed(
+        client, admin_headers, project["id"],
+        [{"owner": a, "status": "in_progress", "annotation": True}],
+    )
+
+    _reassign(
+        client, admin_headers, project["id"],
+        {"assignee_id": c, "from_assignee_id": a, "only_unfinished": True},
+    )
+
+    detail = client.get(f"/api/v1/items/{iid}", headers=admin_headers).json()
+    assert detail["assigned_to"] == c
+    assert detail["annotation"]["value"] == {"keypoints": [[1, 2, 2]]}
 
 
 # --- error shapes -----------------------------------------------------------

@@ -381,13 +381,11 @@ accepted anywhere in the system anymore.
   400 if either id does not exist; **404** if the video has no frames in
   the project; **409** if it has frames but none matched the filters.
 
-  An **unfinished** annotation follows its item to the new owner: the
-  file is rewritten as `<iid>__<new_uid>.json` with `annotator_id`
-  updated, so the new assignee inherits the partial work as a starting
-  point and the item keeps exactly one annotation file. A `done` or
-  `reviewed` annotation is left under its original author, preserving
-  credit — reassigning it changes only who may edit the item, and the
-  existing annotation stays visible through the lookup fallback in §3.
+  Reassignment never touches annotations. `annotator_id` records who did
+  the work and is not rewritten — an admin may hand a half-finished frame
+  around repeatedly while it is being fixed, and none of that makes the
+  new holder its author. The new assignee still inherits the partial work
+  through the lookup fallback in §3.
 - `POST   /projects/{id}/videos/{source}/split` — admin-only; splits the
   video's **unassigned** frames into contiguous blocks, one per
   annotator. Body `{"assignee_ids": [<id>, ...]}`. Frames already

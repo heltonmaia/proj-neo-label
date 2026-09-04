@@ -116,11 +116,12 @@ def reassign_video(
     what they had not finished goes to someone else while the work they
     completed stays credited to them.
 
-    An unfinished item's annotation follows it (see `storage.move_annotation`)
-    so the new assignee inherits the partial work and the item keeps one
-    annotation file. A finished annotation is deliberately left under its
-    original author — reassigning completed work changes who may edit it, not
-    who did it.
+    Annotations are deliberately NOT touched. `annotator_id` records who did
+    the work, and reassignment changes only who may edit an item — an admin
+    may hand a half-finished frame around several times while it is being
+    fixed, and none of that makes the new holder its author. The new assignee
+    still inherits the partial work, because `get_annotation` falls back to
+    `storage.find_any_annotation_for_item`.
 
     Returns `(moved, total_in_source)`. The caller needs both to tell a video
     that isn't there (404) from filters that matched nothing (409).
@@ -131,16 +132,12 @@ def reassign_video(
         if (item.get("payload") or {}).get("source_video") != source_video:
             continue
         total += 1
-        previous = item.get("assigned_to")
-        if from_assignee_id is not None and previous != from_assignee_id:
+        if from_assignee_id is not None and item.get("assigned_to") != from_assignee_id:
             continue
-        unfinished = item.get("status") in _UNFINISHED
-        if only_unfinished and not unfinished:
+        if only_unfinished and item.get("status") not in _UNFINISHED:
             continue
         item["assigned_to"] = assignee_id
         storage.save_item(item)
-        if unfinished and previous is not None and assignee_id is not None:
-            storage.move_annotation(project_id, item["id"], previous, assignee_id)
         moved += 1
     return moved, total
 
@@ -240,6 +237,29 @@ def delete_video(project_id: int, source_video: str) -> int:
             except OSError:
                 pass
     return count
+
+
+def latest_annotations_by_item(project_id: int) -> dict[int, dict]:
+    """One annotation per item id, most recently updated wins.
+
+    An item can legitimately carry several annotation files — they are keyed
+    `{item_id}__{annotator_id}.json`, so an admin annotating an unassigned item
+    files it under themselves, and a later assignee saving files a second one.
+    Reducing that with a plain `{a["item_id"]: a for a in ...}` lets `glob`
+    order pick the winner, which is filesystem-dependent: the same data can
+    export differently on two runs, and the loser may be a stale partial.
+
+    This resolves it the same way `storage.find_any_annotation_for_item` does,
+    so a single item and a whole-project export never disagree about which
+    annotation is current.
+    """
+    out: dict[int, dict] = {}
+    for a in storage.list_annotations_for_project(project_id):
+        iid = a["item_id"]
+        prev = out.get(iid)
+        if prev is None or (a.get("updated_at") or "") > (prev.get("updated_at") or ""):
+            out[iid] = a
+    return out
 
 
 def user_has_assignment_in_project(project_id: int, user_id: int) -> bool:
@@ -697,7 +717,7 @@ def eligible_pose_items(
     dims are readable; at least one keypoint is visible (v>0).
     """
     items = storage.list_items(project_id)
-    anns = {a["item_id"]: a for a in storage.list_annotations_for_project(project_id)}
+    anns = latest_annotations_by_item(project_id)
     data_root = Path(settings.DATA_DIR)
 
     for item in items:
@@ -937,7 +957,7 @@ def build_bundle_export(project_id: int, video_index: bool = False) -> tuple[Bin
     no image is bundled for them — the row still makes it into the json.
     """
     items = storage.list_items(project_id)
-    anns = {a["item_id"]: a for a in storage.list_annotations_for_project(project_id)}
+    anns = latest_annotations_by_item(project_id)
     data_root = Path(settings.DATA_DIR)
 
     spooled = tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024, mode="w+b")
@@ -1064,7 +1084,7 @@ def _iter_export_rows(project_id: int) -> Iterator[dict]:
     caller can stream without materializing the whole list. Pending items
     are emitted with `annotation: null`; filtering is downstream."""
     items = storage.list_items(project_id)
-    anns = {a["item_id"]: a for a in storage.list_annotations_for_project(project_id)}
+    anns = latest_annotations_by_item(project_id)
     for i in items:
         yield {
             "id": i["id"],
