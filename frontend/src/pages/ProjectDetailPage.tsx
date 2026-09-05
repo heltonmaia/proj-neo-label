@@ -250,13 +250,23 @@ export default function ProjectDetailPage() {
     },
   });
 
+  // Whole-video reassign — the blunt one: every frame to a single person, or
+  // all of them back to the pool. Only ever called from a confirmed dialog;
+  // see the ASSIGNED TO select below for why that guard exists.
   const reassign = useMutation({
-    mutationFn: (p: { source: string; assigneeId: number | null }) =>
-      reassignVideo(projectId, p.source, p.assigneeId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['items', projectId] });
-      qc.invalidateQueries({ queryKey: ['videos', projectId] });
+    mutationFn: async (p: { source: string; assigneeId: number | null }) => {
+      const r = await reassignVideo(projectId, p.source, p.assigneeId);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['items', projectId] }),
+        qc.invalidateQueries({ queryKey: ['videos', projectId] }),
+      ]);
+      return r;
     },
+    onError: (e) =>
+      alert(
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+          'Could not reassign the video — check the backend logs.',
+      ),
   });
 
   // Who holds frames of which video, and how many are still open. Computed
@@ -1700,10 +1710,47 @@ export default function ProjectDetailPage() {
                   <td className="py-2">
                     <select
                       value={v.assigned_to ?? ''}
+                      // This control REASSIGNS THE WHOLE VIDEO, but it reads as
+                      // a status field, so admins open it just to see who holds
+                      // the video. One did exactly that right after removing an
+                      // annotator, clicked that annotator's name to check, and
+                      // silently handed all 240 frames straight back — reported
+                      // as "I removed them and the frames came back". Hence the
+                      // confirmation: it names the count and everyone the frames
+                      // are taken from. Never make this mutate on change again.
+                      // Cancelling needs no manual revert: opening the dialog
+                      // re-renders, and the value prop snaps the select back.
                       onChange={(e) => {
                         const raw = e.target.value;
                         const assigneeId = raw === '' ? null : Number(raw);
-                        reassign.mutate({ source: v.source_video, assigneeId });
+                        if (assigneeId === (v.assigned_to ?? null)) return;
+                        const losing = holdersOf(v.source_video).filter(
+                          (h) => h.id !== assigneeId,
+                        );
+                        const taken = losing.reduce((n, h) => n + h.total, 0);
+                        const from = losing
+                          .map((h) => userNameById.get(h.id) ?? `user #${h.id}`)
+                          .join(', ');
+                        const target =
+                          assigneeId === null
+                            ? 'the unassigned pool'
+                            : (userNameById.get(assigneeId) ?? `user #${assigneeId}`);
+                        confirmDialog.ask({
+                          title:
+                            assigneeId === null
+                              ? 'Unassign the whole video?'
+                              : 'Give the whole video to one annotator?',
+                          message:
+                            `All ${v.frames} frames of "${v.source_video}" go to ${target}.` +
+                            (taken > 0
+                              ? ` That takes ${taken} frame${taken === 1 ? '' : 's'} away from ${from}, finished work included.`
+                              : '') +
+                            ' To move just one annotator\u2019s frames, cancel and use the remove button instead.',
+                          confirmLabel: assigneeId === null ? 'Unassign all' : 'Assign all',
+                          tone: taken > 0 ? 'danger' : 'default',
+                          onConfirm: () =>
+                            reassign.mutate({ source: v.source_video, assigneeId }),
+                        });
                       }}
                       className="border rounded px-2 py-1 text-sm"
                     >
