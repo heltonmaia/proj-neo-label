@@ -166,6 +166,40 @@ def test_unfinished_frames_return_to_pool_when_assignee_is_null(
     assert _owners(project["id"]) == {1: None, 2: a}
 
 
+def test_handing_one_annotator_over_moves_their_finished_frames_too(
+    client, admin_headers, project
+):
+    """What the remove-annotator dialog sends by default: `from_assignee_id`
+    plus a real `assignee_id`, no `only_unfinished`. Every frame the departing
+    annotator holds goes to the replacement, done and reviewed included, so
+    their name leaves the video entirely. Statuses are untouched by the move.
+    """
+    a = _annotator(client, admin_headers, "ann-a")
+    b = _annotator(client, admin_headers, "ann-b")
+    c = _annotator(client, admin_headers, "ann-c")
+    _seed(
+        client, admin_headers, project["id"],
+        [
+            {"owner": a, "status": "done"},
+            {"owner": a, "status": "reviewed"},
+            {"owner": a, "status": "pending"},
+            {"owner": b, "status": "in_progress"},
+        ],
+    )
+
+    r = _reassign(
+        client, admin_headers, project["id"],
+        {"assignee_id": c, "from_assignee_id": a},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"reassigned": 3, "assignee_id": c}
+    assert _owners(project["id"]) == {1: c, 2: c, 3: c, 4: b}
+    assert [i["status"] for i in sorted(
+        storage.list_items(project["id"]), key=lambda i: i["payload"]["frame_index"]
+    )] == ["done", "reviewed", "pending", "in_progress"]
+
+
 def test_all_of_one_annotators_frames_return_to_pool_when_only_unfinished_is_off(
     client, admin_headers, project
 ):

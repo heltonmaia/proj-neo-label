@@ -20,28 +20,37 @@ export interface Holder {
 interface Props {
   sourceVideo: string;
   holders: Holder[];
-  /** Everyone, assignable or not — only used to name the holders, and a
-   *  legacy account with no email can still be holding frames. */
+  /** Everyone, assignable or not. Only used to *name* the holders — a legacy
+   *  emailless account can still hold frames and must be nameable. */
   users: Annotator[];
+  /** Where the frames may go: accounts that can actually sign in. Never offer
+   *  a legacy account as a destination, or the work lands where nobody can
+   *  reach it. */
+  destinations: Annotator[];
   inFlight: boolean;
   disabled?: boolean;
-  onRemove: (p: { annotatorId: number; keepFinished: boolean }) => void;
+  onRemove: (p: {
+    annotatorId: number;
+    toId: number | null;
+    keepFinished: boolean;
+  }) => void;
 }
 
 /**
  * Per-video "remove this annotator" control.
  *
- * Releases one annotator's frames back to the unassigned pool. Handing them to
- * someone else is then the dropdown's or the assign button's job. This is the
- * one verb the admin asked for, in place of a from→to handover dialog and a
- * project-wide "annotator left" sweep: free the frames, then use the controls
- * that already exist.
+ * Takes one annotator off a video and says, in the same breath, where their
+ * frames go: to a replacement, or back to the unassigned pool. The
+ * destination is a required choice rather than an implicit "pool", because
+ * removing someone mid-video is normally a hand-over, and leaving the frames
+ * in limbo is the rarer intent.
  *
- * Every frame they hold goes, finished ones included, so their name is off
+ * Every frame they hold moves, finished ones included, so their name is off
  * the video and off its rows — a removal that left them on the done frames
  * read as "it didn't work". `keepFinished` opts back into the narrower move
- * for the case where completed work should stay theirs. Nothing here changes
- * who *authored* an annotation; only who may edit the frame.
+ * for the case where completed work should stay theirs; the dialog then says
+ * plainly that this keeps them on the video. Nothing here changes who
+ * *authored* an annotation, only who may edit the frame.
  *
  * Dialog rather than a popover for the same reason as `SplitVideoButton`: the
  * row lives in a table wrapped in `overflow-x-auto`, which clips an
@@ -51,22 +60,25 @@ export function RemoveAnnotatorButton({
   sourceVideo,
   holders,
   users,
+  destinations,
   inFlight,
   disabled,
   onRemove,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [annotatorId, setAnnotatorId] = useState<number | ''>('');
+  const [toId, setToId] = useState<number | '' | 'pool'>('');
   const [keepFinished, setKeepFinished] = useState(false);
 
   const nobodyHolds = holders.length === 0;
   const off = inFlight || disabled || nobodyHolds;
   const holder = holders.find((h) => h.id === annotatorId);
-  const releasing = holder ? (keepFinished ? holder.unfinished : holder.total) : 0;
-  const ready = holder != null && releasing > 0;
+  const moving = holder ? (keepFinished ? holder.unfinished : holder.total) : 0;
+  const ready = holder != null && toId !== '' && moving > 0;
+  const leftBehind = holder ? holder.total - holder.unfinished : 0;
 
   function openDialog() {
-    // A single holder needs no picking.
+    // A single holder needs no picking. The destination always does.
     setAnnotatorId(holders.length === 1 ? holders[0].id : '');
     setOpen(true);
   }
@@ -74,6 +86,7 @@ export function RemoveAnnotatorButton({
   function close() {
     setOpen(false);
     setAnnotatorId('');
+    setToId('');
     setKeepFinished(false);
   }
 
@@ -101,7 +114,7 @@ export function RemoveAnnotatorButton({
         title={
           nobodyHolds
             ? 'No annotator holds frames of this video'
-            : "Remove an annotator — their frames go back to the pool"
+            : 'Remove an annotator and hand their frames to someone else'
         }
         aria-label="Remove an annotator from this video"
       >
@@ -151,15 +164,14 @@ export function RemoveAnnotatorButton({
                 Remove annotator from "{sourceVideo}"
               </h2>
               <p className="mt-1 text-xs text-slate-600 leading-relaxed">
-                Their frames go back to the unassigned pool, where the dropdown or
-                the assign button can hand them to someone else. Other annotators'
-                frames are never touched.
+                Their frames move in one step to whoever you pick, or back to the
+                unassigned pool. Other annotators' frames are never touched.
               </p>
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 border-y space-y-3">
               <label className="block">
-                <span className="text-xs font-medium text-slate-700">Annotator</span>
+                <span className="text-xs font-medium text-slate-700">Remove</span>
                 <select
                   value={annotatorId}
                   onChange={(e) =>
@@ -176,6 +188,28 @@ export function RemoveAnnotatorButton({
                 </select>
               </label>
 
+              <label className="block">
+                <span className="text-xs font-medium text-slate-700">Their frames go to</span>
+                <select
+                  value={toId}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setToId(raw === '' ? '' : raw === 'pool' ? 'pool' : Number(raw));
+                  }}
+                  className="mt-1 w-full border rounded px-2 py-1.5 text-sm"
+                >
+                  <option value="">— pick a destination —</option>
+                  <option value="pool">— back to the unassigned pool —</option>
+                  {destinations
+                    .filter((u) => u.id !== annotatorId)
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {userLabel(u)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
               <label className="flex items-start gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -186,33 +220,37 @@ export function RemoveAnnotatorButton({
                 <span className="text-xs text-slate-700 leading-relaxed">
                   Keep their finished frames assigned to them
                   <span className="block text-slate-500">
-                    Off: everything they hold goes back to the pool and their
-                    name leaves this video. On: done and reviewed frames stay
-                    theirs. Who authored an annotation never changes either way.
+                    Off: everything they hold moves and their name leaves this
+                    video. On: done and reviewed frames stay theirs. Who authored
+                    an annotation never changes either way.
                   </span>
                 </span>
               </label>
 
               {holder && (
                 <p className="text-xs tabular-nums text-slate-600">
-                  {releasing === 0 ? (
+                  {moving === 0 ? (
                     <span className="text-amber-600">
-                      Nothing to release — {nameOf(holder.id)} has only finished
-                      frames here, and the box above keeps those with them.
+                      Nothing to move — {nameOf(holder.id)} has only finished frames
+                      here, and the box above keeps those with them.
                     </span>
                   ) : (
                     <>
-                      <strong>{releasing}</strong> {releasing === 1 ? 'frame' : 'frames'}{' '}
-                      will go back to the pool
-                      {!keepFinished && holder.unfinished < holder.total && (
+                      <strong>{moving}</strong> {moving === 1 ? 'frame' : 'frames'}{' '}
+                      {toId === ''
+                        ? 'will move once you pick a destination'
+                        : toId === 'pool'
+                          ? 'will go back to the unassigned pool'
+                          : `will go to ${nameOf(toId as number)}`}
+                      {!keepFinished && leftBehind > 0 && (
                         <span className="text-slate-500">
-                          , including {holder.total - holder.unfinished} already finished
+                          , including {leftBehind} already finished
                         </span>
                       )}
-                      {keepFinished && (
+                      {keepFinished && leftBehind > 0 && (
                         <span className="text-amber-600">
-                          ; {holder.total - holder.unfinished} finished stay with them, so
-                          their name remains on this video
+                          ; {leftBehind} finished stay with {nameOf(holder.id)}, so their
+                          name remains on this video
                         </span>
                       )}
                       .
@@ -239,7 +277,11 @@ export function RemoveAnnotatorButton({
                   disabled={!ready}
                   onClick={() => {
                     if (!ready || holder == null) return;
-                    onRemove({ annotatorId: holder.id, keepFinished });
+                    onRemove({
+                      annotatorId: holder.id,
+                      toId: toId === 'pool' ? null : (toId as number),
+                      keepFinished,
+                    });
                     close();
                   }}
                   className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"

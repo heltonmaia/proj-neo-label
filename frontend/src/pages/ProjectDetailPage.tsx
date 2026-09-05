@@ -283,9 +283,9 @@ export default function ProjectDetailPage() {
   const holdersOf = (source: string): Holder[] =>
     [...(holdersByVideo.get(source)?.values() ?? [])];
 
-  // "Remove annotator": release one holder's frames back to the pool, so their
-  // name is off the video entirely. Handing the freed frames to someone else is
-  // then `reassign` (the dropdown) or `splitMut`'s job.
+  // "Remove annotator": take one holder off a video and move their frames
+  // where the dialog says — a replacement, or back to the pool. One request
+  // either way; `toId: null` is the pool.
   //
   // The refetch is awaited *inside* mutationFn, not fired from `onSuccess`.
   // Invalidating without awaiting settles the mutation while the row is still
@@ -295,8 +295,13 @@ export default function ProjectDetailPage() {
   // until the row can actually show the new state.
   const [releasingVideo, setReleasingVideo] = useState<string | null>(null);
   const releaseFrom = useMutation({
-    mutationFn: async (p: { source: string; annotatorId: number; keepFinished: boolean }) => {
-      const r = await reassignVideo(projectId, p.source, null, {
+    mutationFn: async (p: {
+      source: string;
+      annotatorId: number;
+      toId: number | null;
+      keepFinished: boolean;
+    }) => {
+      const r = await reassignVideo(projectId, p.source, p.toId, {
         fromAssigneeId: p.annotatorId,
         onlyUnfinished: p.keepFinished,
       });
@@ -1748,12 +1753,14 @@ export default function ProjectDetailPage() {
                       sourceVideo={v.source_video}
                       holders={holdersOf(v.source_video)}
                       users={usersQ.data ?? []}
+                      destinations={assignableOptions(usersQ.data ?? [])}
                       inFlight={releasingVideo === v.source_video}
                       disabled={releaseFrom.isPending}
-                      onRemove={({ annotatorId, keepFinished }) =>
+                      onRemove={({ annotatorId, toId, keepFinished }) =>
                         releaseFrom.mutate({
                           source: v.source_video,
                           annotatorId,
+                          toId,
                           keepFinished,
                         })
                       }
@@ -1948,8 +1955,7 @@ export default function ProjectDetailPage() {
               </button>
             ))}
           <div className="flex items-center gap-2 flex-wrap ml-auto">
-            {isAdmin &&
-              itemAnnotators.ids.length + (itemAnnotators.hasUnassigned ? 1 : 0) > 1 && (
+            {isAdmin && items.length > 0 && (
                 <select
                   value={assigneeFilter === '' ? '' : String(assigneeFilter)}
                   onChange={(e) => {
