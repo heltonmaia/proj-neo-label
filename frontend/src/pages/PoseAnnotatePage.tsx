@@ -150,6 +150,7 @@ export default function PoseAnnotatePage() {
   // frames in a pose project are 640x640, so leaving the previous dims in
   // place for a frame is invisible.
   const [imgDims, setImgDims] = useState<ImgDims | null>(null);
+  type SavePayload = { itemId: number; kps: KeypointsMap; oof: Set<number> };
   const historyRef = useRef<{ kps: KeypointsMap; oof: Set<number> }[]>([]);
   const imgRef = useRef<HTMLImageElement>(null);
   const draggingRef = useRef<DragState | null>(null);
@@ -213,20 +214,52 @@ export default function PoseAnnotatePage() {
     enabled: !!prev,
   });
 
+  // Autosave fires on every edit and the canvas draws from local state, so a
+  // failed save looks exactly like a successful one: the dots stay put and the
+  // annotator moves on. The realistic trigger is this app's own admin flow —
+  // reassigning a video out from under someone with a frame open makes
+  // `_require_item_access` 404 every later save. 401 at least logs them out via
+  // the axios interceptor; 404/500/offline used to produce nothing at all.
+  // Hence a sticky banner, and a retry that replays the last payload.
+  //
+  // The payload carries its own `itemId` rather than closing over
+  // `currentItemId`. This component does NOT remount when you walk to the next
+  // frame — the URL param changes and an effect resets the per-item state — so
+  // a Retry pressed on frame B would otherwise PUT frame A's keypoints onto
+  // frame B. `saveError` is tagged with the same id, so the pill can say which
+  // frame is unsaved instead of silently re-pointing at the current one.
+  const [saveError, setSaveError] = useState<{ itemId: number; message: string } | null>(null);
+  const lastSaveRef = useRef<SavePayload | null>(null);
+
   const save = useMutation({
-    mutationFn: (payload: { kps: KeypointsMap; oof: Set<number> }) => {
+    mutationFn: (payload: SavePayload) => {
       const arr: KeypointValue[] = schemaKps.map(
         (kp) => payload.kps[kp.id] ?? ([0, 0, 0] as KeypointValue),
       );
       const oofArr = schemaKps.map((kp) => payload.oof.has(kp.id));
-      return saveAnnotation(currentItemId, {
+      return saveAnnotation(payload.itemId, {
         keypoints: arr,
         out_of_frame: oofArr,
       });
     },
-    onSuccess: () => {
+    onMutate: (payload) => {
+      lastSaveRef.current = payload;
+    },
+    onSuccess: (_data, payload) => {
+      setSaveError((cur) => (cur && cur.itemId !== payload.itemId ? cur : null));
       qc.invalidateQueries({ queryKey: ['items', projectId] });
-      qc.invalidateQueries({ queryKey: ['item', currentItemId] });
+      qc.invalidateQueries({ queryKey: ['item', payload.itemId] });
+    },
+    onError: (e, payload) => {
+      const res = (e as { response?: { data?: { detail?: string }; status?: number } })?.response;
+      setSaveError({
+        itemId: payload.itemId,
+        message:
+          res?.data?.detail ??
+          (res?.status === 404
+            ? 'This frame is no longer assigned to you — an admin may have reassigned it.'
+            : 'Could not reach the server.'),
+      });
     },
   });
 
@@ -419,7 +452,7 @@ export default function PoseAnnotatePage() {
       setOutOfFrame(nextOof);
     }
     setKeypoints(nextMap);
-    save.mutate({ kps: nextMap, oof: nextOof });
+    save.mutate({ itemId: currentItemId, kps: nextMap, oof: nextOof });
     advanceAfterPlace(nextMap, nextOof, currentKp);
   }
 
@@ -430,7 +463,7 @@ export default function PoseAnnotatePage() {
     nextOof.add(currentKp);
     setKeypoints(nextMap);
     setOutOfFrame(nextOof);
-    save.mutate({ kps: nextMap, oof: nextOof });
+    save.mutate({ itemId: currentItemId, kps: nextMap, oof: nextOof });
     advanceAfterPlace(nextMap, nextOof, currentKp);
   }
 
@@ -460,6 +493,21 @@ export default function PoseAnnotatePage() {
     placeAt(cursor.x * img.naturalWidth, cursor.y * img.naturalHeight, visibility);
   }
 
+  // Keep a mouse click from leaving focus on a write button.
+  //
+  // Guarding Enter/Space on `keyboardMode` meant no longer calling
+  // preventDefault when the guard rejects — which is what lets Space scroll
+  // again. But an unprevented Space keydown on a *focused button* is how the
+  // browser activates it, and the window handler exempts only INPUT/TEXTAREA.
+  // So clicking "Occluded" with the mouse and then pressing Space to scroll
+  // re-fired that write at an unaimed cursor: the original bug, through a door
+  // the old blanket preventDefault had been masking.
+  //
+  // preventDefault on mousedown suppresses focus-on-click without touching the
+  // click itself, so keyboard users still Tab to these and press Space
+  // normally. Apply it to any button here that writes.
+  const noFocusOnClick = (e: React.MouseEvent) => e.preventDefault();
+
   function markOccluded() {
     placeAtCursor(1);
   }
@@ -473,7 +521,7 @@ export default function PoseAnnotatePage() {
       setOutOfFrame(nextOof);
     }
     setKeypoints(nextMap);
-    save.mutate({ kps: nextMap, oof: nextOof });
+    save.mutate({ itemId: currentItemId, kps: nextMap, oof: nextOof });
   }
 
   function clearAll() {
@@ -488,7 +536,7 @@ export default function PoseAnnotatePage() {
         const o = new Set<number>();
         setKeypoints(m);
         setOutOfFrame(o);
-        save.mutate({ kps: m, oof: o });
+        save.mutate({ itemId: currentItemId, kps: m, oof: o });
         setCurrentKp(0);
       },
     });
@@ -520,7 +568,7 @@ export default function PoseAnnotatePage() {
       }
       setKeypoints(m);
       setOutOfFrame(o);
-      save.mutate({ kps: m, oof: o });
+      save.mutate({ itemId: currentItemId, kps: m, oof: o });
       setCurrentKp(sequence[0]);
     };
     const hasPlaced = Object.values(keypoints).some((v) => v && v[2] > 0);
@@ -541,7 +589,7 @@ export default function PoseAnnotatePage() {
     if (!prev) return;
     setKeypoints(prev.kps);
     setOutOfFrame(prev.oof);
-    save.mutate({ kps: prev.kps, oof: prev.oof });
+    save.mutate({ itemId: currentItemId, kps: prev.kps, oof: prev.oof });
   }
 
   // Rapid Shift+Arrow presses coalesce into one undo step and one save:
@@ -565,7 +613,7 @@ export default function PoseAnnotatePage() {
     if (saveDebounceRef.current !== null) clearTimeout(saveDebounceRef.current);
     saveDebounceRef.current = window.setTimeout(() => {
       setKeypoints((latest) => {
-        save.mutate({ kps: latest, oof: outOfFrame });
+        save.mutate({ itemId: currentItemId, kps: latest, oof: outOfFrame });
         return latest;
       });
       saveDebounceRef.current = null;
@@ -621,7 +669,28 @@ export default function PoseAnnotatePage() {
       }
 
       // Actions
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); placeAtCursor(); return; }
+      if (e.key === 'Enter' || e.key === ' ') {
+        // Only place while the keyboard crosshair is actually on screen.
+        // `keyboardMode` is armed by a plain arrow key and disarmed the moment
+        // the mouse moves over the image, so it means exactly "the user is
+        // aiming with the overlay they can see".
+        //
+        // Without this guard Space wrote a keypoint at the cursor's *default*
+        // position — the image centre — and saved it. Space is the universal
+        // page-scroll gesture, and it also re-triggers whatever button has
+        // focus (e.g. "Review queue on/off"), so a curator scrolling this tall
+        // page silently corrupted a keypoint. Worse, every save recomputes
+        // status server-side (`_status_for` only returns done/in_progress), so
+        // the stray write also demoted a `reviewed` frame back to `done` and
+        // threw the approval away. Undo re-saves, so it did not restore it.
+        //
+        // Falling through without preventDefault lets Space scroll, which is
+        // what the user wanted in the first place.
+        if (!keyboardMode) return;
+        e.preventDefault();
+        placeAtCursor();
+        return;
+      }
       if (e.key === 'o' || e.key === 'O') return markOccluded();
       if (e.key === 'x' || e.key === 'X') return markOutOfFrame();
       if (e.key === 'u' || e.key === 'U') return undo();
@@ -644,7 +713,7 @@ export default function PoseAnnotatePage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentKp, keypoints, outOfFrame, prev, next, cursor, confirm.isOpen, canReview, itemQ.data?.status]);
+  }, [currentKp, keypoints, outOfFrame, prev, next, cursor, keyboardMode, confirm.isOpen, canReview, itemQ.data?.status]);
 
   if (itemQ.isLoading || projectQ.isLoading) return <p className="p-6">Loading…</p>;
   if (!itemQ.data || !projectQ.data) return <p className="p-6">Not found.</p>;
@@ -733,6 +802,32 @@ export default function PoseAnnotatePage() {
               Review queue {reviewMode ? 'on' : 'off'}
             </button>
           )}
+          {saveError ? (
+            <span
+              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold border border-red-300 bg-red-50 text-red-700"
+              role="alert"
+              title={saveError.message}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+                <circle cx="12" cy="12" r="9" />
+              </svg>
+              {saveError.itemId === currentItemId
+                ? 'Not saved'
+                : `Frame #${saveError.itemId} not saved`}
+              <button
+                type="button"
+                onClick={() => lastSaveRef.current && save.mutate(lastSaveRef.current)}
+                disabled={save.isPending}
+                className="ml-1 underline underline-offset-2 hover:no-underline disabled:opacity-50"
+              >
+                {save.isPending ? 'Retrying…' : 'Retry'}
+              </button>
+            </span>
+          ) : save.isPending ? (
+            <span className="text-xs text-slate-400">Saving…</span>
+          ) : null}
           <span className="flex items-center gap-2">
             {idx >= 0 ? `${idx + 1} / ${cohort.length}` : ''} ·
             <span
@@ -864,7 +959,7 @@ export default function PoseAnnotatePage() {
                       if (drag?.moved) {
                         // read latest state via functional setter, then persist
                         setKeypoints((latest) => {
-                          save.mutate({ kps: latest, oof: outOfFrame });
+                          save.mutate({ itemId: currentItemId, kps: latest, oof: outOfFrame });
                           return latest;
                         });
                       } else {
@@ -1152,6 +1247,7 @@ export default function PoseAnnotatePage() {
           <div className="grid grid-cols-2 gap-2 text-sm">
             <button
               onClick={markOccluded}
+              onMouseDown={noFocusOnClick}
               title="Mark occluded (right-click / O) — point exists, you know where"
               className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 active:translate-y-px transition inline-flex items-center justify-center gap-1.5"
             >
@@ -1160,6 +1256,7 @@ export default function PoseAnnotatePage() {
             </button>
             <button
               onClick={markOutOfFrame}
+              onMouseDown={noFocusOnClick}
               title="Mark out of frame (X) — keypoint is not in the image (saved as v=0)"
               className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 active:translate-y-px transition inline-flex items-center justify-center gap-1.5"
             >
@@ -1168,6 +1265,7 @@ export default function PoseAnnotatePage() {
             </button>
             <button
               onClick={clearCurrent}
+              onMouseDown={noFocusOnClick}
               title="Clear current keypoint (Backspace)"
               className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 active:translate-y-px transition inline-flex items-center justify-center gap-1.5"
             >
@@ -1176,6 +1274,7 @@ export default function PoseAnnotatePage() {
             </button>
             <button
               onClick={undo}
+              onMouseDown={noFocusOnClick}
               title="Undo (U)"
               className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 active:translate-y-px transition inline-flex items-center justify-center gap-1.5"
             >
