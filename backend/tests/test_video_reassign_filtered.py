@@ -166,6 +166,35 @@ def test_unfinished_frames_return_to_pool_when_assignee_is_null(
     assert _owners(project["id"]) == {1: None, 2: a}
 
 
+def test_all_of_one_annotators_frames_return_to_pool_when_only_unfinished_is_off(
+    client, admin_headers, project
+):
+    """The "also release finished frames" variant of the remove-annotator
+    control: `assignee_id: null` + `from_assignee_id` with the default
+    `only_unfinished=False` frees done/reviewed frames too, and still never
+    touches frames held by someone else."""
+    a = _annotator(client, admin_headers, "ann-a")
+    b = _annotator(client, admin_headers, "ann-b")
+    _seed(
+        client, admin_headers, project["id"],
+        [
+            {"owner": a, "status": "done"},
+            {"owner": a, "status": "reviewed"},
+            {"owner": a, "status": "pending"},
+            {"owner": b, "status": "done"},
+        ],
+    )
+
+    r = _reassign(
+        client, admin_headers, project["id"],
+        {"assignee_id": None, "from_assignee_id": a},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"reassigned": 3, "assignee_id": None}
+    assert _owners(project["id"]) == {1: None, 2: None, 3: None, 4: b}
+
+
 def test_item_sent_back_by_curation_counts_as_unfinished(
     client, admin_headers, project
 ):

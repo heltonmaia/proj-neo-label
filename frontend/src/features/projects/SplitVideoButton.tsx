@@ -28,7 +28,10 @@ function blockSizes(total: number, n: number): number[] {
 }
 
 /**
- * Per-video "split" control: pick annotators, preview the blocks, confirm.
+ * Per-video "assign the free frames" control: pick one or more annotators,
+ * preview the blocks, confirm. One annotator takes every unassigned frame;
+ * several get contiguous blocks. Frames that already have an owner stay put,
+ * which is what makes this the safe follow-up to `RemoveAnnotatorButton`.
  *
  * The picker is a centred dialog rather than a popover anchored to the button.
  * Both places this control lives clip an absolutely-positioned child — the
@@ -85,10 +88,10 @@ export function SplitVideoButton({
         className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-40 leading-none"
         title={
           nothingToSplit
-            ? 'No unassigned frames to split'
-            : `Split the ${unassigned} unassigned frames between annotators`
+            ? 'No unassigned frames to hand out'
+            : `Assign the ${unassigned} unassigned frames to one or more annotators`
         }
-        aria-label="Split unassigned frames between annotators"
+        aria-label="Assign unassigned frames to annotators"
       >
         {inFlight ? (
           <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -133,11 +136,12 @@ export function SplitVideoButton({
           >
             <div className="p-4 pb-2">
               <h2 id="split-title" className="text-base font-semibold text-slate-900 truncate">
-                Split "{sourceVideo}"
+                Assign free frames of "{sourceVideo}"
               </h2>
               <p className="mt-1 text-xs text-slate-600 leading-relaxed">
-                {unassigned} unassigned {unassigned === 1 ? 'frame' : 'frames'} into
-                contiguous blocks, in the order you pick — the first annotator gets
+                {unassigned} unassigned {unassigned === 1 ? 'frame' : 'frames'} go to
+                the annotators you pick. One annotator takes them all; several get
+                contiguous blocks in the order you pick — the first annotator gets
                 the earliest frames. Frames that already have an annotator stay put.
               </p>
             </div>
@@ -198,7 +202,7 @@ export function SplitVideoButton({
                     }}
                     className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    Split
+                    Assign
                   </button>
                 </div>
               </div>
