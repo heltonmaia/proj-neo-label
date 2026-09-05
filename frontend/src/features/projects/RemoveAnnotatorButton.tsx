@@ -25,7 +25,7 @@ interface Props {
   users: Annotator[];
   inFlight: boolean;
   disabled?: boolean;
-  onRemove: (p: { annotatorId: number; includeFinished: boolean }) => void;
+  onRemove: (p: { annotatorId: number; keepFinished: boolean }) => void;
 }
 
 /**
@@ -37,14 +37,15 @@ interface Props {
  * project-wide "annotator left" sweep: free the frames, then use the controls
  * that already exist.
  *
- * `includeFinished` is off by default, so done and reviewed frames stay with
- * the person who did them — ticking it is occasionally what an admin wants
- * but never the safe default. Nothing here changes who authored an
- * annotation; only who may edit the frame.
+ * Every frame they hold goes, finished ones included, so their name is off
+ * the video and off its rows — a removal that left them on the done frames
+ * read as "it didn't work". `keepFinished` opts back into the narrower move
+ * for the case where completed work should stay theirs. Nothing here changes
+ * who *authored* an annotation; only who may edit the frame.
  *
- * Dialog rather than a popover for the same reason as `SplitVideoButton`: both
- * mount points clip an absolutely-positioned child (the list view's table is
- * `overflow-x-auto`, the grid card `overflow-hidden`).
+ * Dialog rather than a popover for the same reason as `SplitVideoButton`: the
+ * row lives in a table wrapped in `overflow-x-auto`, which clips an
+ * absolutely-positioned child at the section edge.
  */
 export function RemoveAnnotatorButton({
   sourceVideo,
@@ -56,12 +57,12 @@ export function RemoveAnnotatorButton({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [annotatorId, setAnnotatorId] = useState<number | ''>('');
-  const [includeFinished, setIncludeFinished] = useState(false);
+  const [keepFinished, setKeepFinished] = useState(false);
 
   const nobodyHolds = holders.length === 0;
   const off = inFlight || disabled || nobodyHolds;
   const holder = holders.find((h) => h.id === annotatorId);
-  const releasing = holder ? (includeFinished ? holder.total : holder.unfinished) : 0;
+  const releasing = holder ? (keepFinished ? holder.unfinished : holder.total) : 0;
   const ready = holder != null && releasing > 0;
 
   function openDialog() {
@@ -73,7 +74,7 @@ export function RemoveAnnotatorButton({
   function close() {
     setOpen(false);
     setAnnotatorId('');
-    setIncludeFinished(false);
+    setKeepFinished(false);
   }
 
   useEffect(() => {
@@ -178,16 +179,16 @@ export function RemoveAnnotatorButton({
               <label className="flex items-start gap-2 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={includeFinished}
-                  onChange={(e) => setIncludeFinished(e.target.checked)}
+                  checked={keepFinished}
+                  onChange={(e) => setKeepFinished(e.target.checked)}
                   className="mt-0.5"
                 />
                 <span className="text-xs text-slate-700 leading-relaxed">
-                  Also release finished frames
+                  Keep their finished frames assigned to them
                   <span className="block text-slate-500">
-                    Off: done and reviewed frames stay credited to them and out
-                    of the pool. Frames a reviewer sent back count as unfinished.
-                    Who authored an annotation never changes either way.
+                    Off: everything they hold goes back to the pool and their
+                    name leaves this video. On: done and reviewed frames stay
+                    theirs. Who authored an annotation never changes either way.
                   </span>
                 </span>
               </label>
@@ -196,16 +197,22 @@ export function RemoveAnnotatorButton({
                 <p className="text-xs tabular-nums text-slate-600">
                   {releasing === 0 ? (
                     <span className="text-amber-600">
-                      Nothing to release — {nameOf(holder.id)} has no unfinished
-                      frames here. Tick the box to release the finished ones.
+                      Nothing to release — {nameOf(holder.id)} has only finished
+                      frames here, and the box above keeps those with them.
                     </span>
                   ) : (
                     <>
                       <strong>{releasing}</strong> {releasing === 1 ? 'frame' : 'frames'}{' '}
                       will go back to the pool
-                      {includeFinished && holder.unfinished < holder.total && (
-                        <span className="text-amber-600">
+                      {!keepFinished && holder.unfinished < holder.total && (
+                        <span className="text-slate-500">
                           , including {holder.total - holder.unfinished} already finished
+                        </span>
+                      )}
+                      {keepFinished && (
+                        <span className="text-amber-600">
+                          ; {holder.total - holder.unfinished} finished stay with them, so
+                          their name remains on this video
                         </span>
                       )}
                       .
@@ -232,7 +239,7 @@ export function RemoveAnnotatorButton({
                   disabled={!ready}
                   onClick={() => {
                     if (!ready || holder == null) return;
-                    onRemove({ annotatorId: holder.id, includeFinished });
+                    onRemove({ annotatorId: holder.id, keepFinished });
                     close();
                   }}
                   className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"

@@ -148,10 +148,6 @@ export default function ProjectDetailPage() {
     }
   }
 
-  // Videos table filters (admin)
-  const [videoQuery, setVideoQuery] = useState('');
-  const [videoAssigneeFilter, setVideoAssigneeFilter] = useState<number | '' | 'unassigned'>('');
-
   // Items filters / view. 'needs_revision' is a virtual sub-bucket of
   // in_progress (those carrying a review_note from a send-back).
   type ItemFilter = 'all' | ItemStatus | 'needs_revision';
@@ -161,7 +157,6 @@ export default function ProjectDetailPage() {
   // Admin-only (the user list endpoint is admin-only too).
   const [assigneeFilter, setAssigneeFilter] = useState<'' | number | 'unassigned'>('');
   const [itemView, setItemView] = useState<'list' | 'grid'>('list');
-  const [videoView, setVideoView] = useState<'list' | 'grid'>('list');
   const [itemsVisible, setItemsVisible] = useState(50);
 
   const addLabel = useMutation({
@@ -288,21 +283,39 @@ export default function ProjectDetailPage() {
   const holdersOf = (source: string): Holder[] =>
     [...(holdersByVideo.get(source)?.values() ?? [])];
 
-  // "Remove annotator": release one holder's frames back to the pool. Handing
-  // them to someone else is then `reassign` (the dropdown) or `splitMut`'s job.
+  // "Remove annotator": release one holder's frames back to the pool, so their
+  // name is off the video entirely. Handing the freed frames to someone else is
+  // then `reassign` (the dropdown) or `splitMut`'s job.
+  //
+  // The refetch is awaited *inside* mutationFn, not fired from `onSuccess`.
+  // Invalidating without awaiting settles the mutation while the row is still
+  // rendering the pre-removal `assigned_to`, so the annotator's name lingers
+  // for as long as the refetch takes — and the items query pulls 500 rows, so
+  // on a real project that is plainly visible. Awaiting keeps the spinner up
+  // until the row can actually show the new state.
   const [releasingVideo, setReleasingVideo] = useState<string | null>(null);
   const releaseFrom = useMutation({
-    mutationFn: (p: { source: string; annotatorId: number; includeFinished: boolean }) =>
-      reassignVideo(projectId, p.source, null, {
+    mutationFn: async (p: { source: string; annotatorId: number; keepFinished: boolean }) => {
+      const r = await reassignVideo(projectId, p.source, null, {
         fromAssigneeId: p.annotatorId,
-        onlyUnfinished: !p.includeFinished,
-      }),
+        onlyUnfinished: p.keepFinished,
+      });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['items', projectId] }),
+        qc.invalidateQueries({ queryKey: ['videos', projectId] }),
+      ]);
+      return r;
+    },
     onMutate: ({ source }) => setReleasingVideo(source),
     onSettled: () => setReleasingVideo(null),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['items', projectId] });
-      qc.invalidateQueries({ queryKey: ['videos', projectId] });
-    },
+    // Without this a rejected removal is indistinguishable from a no-op: the
+    // row simply keeps the old name and the admin retries, which is exactly
+    // how this looked in the field.
+    onError: (e) =>
+      alert(
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+          'Could not remove the annotator — check the backend logs.',
+      ),
   });
 
   const [splittingVideo, setSplittingVideo] = useState<string | null>(null);
@@ -433,25 +446,6 @@ export default function ProjectDetailPage() {
 
   const items = itemsQ.data?.items ?? [];
   const isPose = projectQ.data?.type === 'pose_detection';
-
-  // For the videos grid view: pick the lowest-indexed frame of each video as
-  // the card thumbnail. The video summary doesn't carry a preview URL, so we
-  // derive it from items (every frame has its own image_url).
-  const videoThumbs = useMemo(() => {
-    const best = new Map<string, { idx: number; url: string }>();
-    for (const i of items) {
-      const p = i.payload as { source_video?: string; frame_index?: number; image_url?: string; frame_rev?: number };
-      const sv = p.source_video;
-      const fi = p.frame_index;
-      const url = frameUrl(p);
-      if (!sv || !url || typeof fi !== 'number') continue;
-      const cur = best.get(sv);
-      if (!cur || fi < cur.idx) best.set(sv, { idx: fi, url });
-    }
-    const out: Record<string, string> = {};
-    best.forEach((v, k) => { out[k] = v.url; });
-    return out;
-  }, [items]);
 
   const statusCounts = useMemo(() => {
     const c: Record<ItemStatus | 'all' | 'needs_revision', number> = {
@@ -1618,16 +1612,8 @@ export default function ProjectDetailPage() {
 
       {/* Videos (admin oversight of per-video assignments) */}
       {isAdmin && isPose && (videosQ.data?.length ?? 0) > 0 && (() => {
-        const all = videosQ.data!;
-        const q = videoQuery.trim().toLowerCase();
-        const filtered = all.filter((v) => {
-          if (q && !v.source_video.toLowerCase().includes(q)) return false;
-          if (videoAssigneeFilter === 'unassigned') {
-            if (v.assigned_to != null) return false;
-          } else if (videoAssigneeFilter !== '' && v.assigned_to !== videoAssigneeFilter) return false;
-          return true;
-        });
-        const totals = filtered.reduce(
+        const videos = videosQ.data!;
+        const totals = videos.reduce(
           (acc, v) => ({
             frames: acc.frames + v.frames,
             done: acc.done + v.done,
@@ -1642,8 +1628,7 @@ export default function ProjectDetailPage() {
                 <h2 className="font-semibold">
                   Videos{' '}
                   <span className="text-sm text-slate-500 font-normal">
-                    ({filtered.length}
-                    {filtered.length !== all.length && ` of ${all.length}`})
+                    ({videos.length})
                   </span>
                 </h2>
                 <p className="text-xs text-slate-500">
@@ -1669,224 +1654,6 @@ export default function ProjectDetailPage() {
               </svg>
             </summary>
             <div className="px-4 pb-4 pt-3 border-t space-y-3">
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                <input
-                  type="search"
-                  value={videoQuery}
-                  onChange={(e) => setVideoQuery(e.target.value)}
-                  placeholder="Search video…"
-                  className="border rounded px-2 py-1 text-sm"
-                />
-                <select
-                  value={videoAssigneeFilter === '' ? '' : String(videoAssigneeFilter)}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setVideoAssigneeFilter(
-                      v === '' ? '' : v === 'unassigned' ? 'unassigned' : Number(v),
-                    );
-                  }}
-                  className="border rounded px-2 py-1 text-sm"
-                >
-                  <option value="">All annotators</option>
-                  <option value="unassigned">— unassigned —</option>
-                  {(usersQ.data ?? []).map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {userLabel(u)}
-                    </option>
-                  ))}
-                </select>
-                <div className="inline-flex border rounded overflow-hidden text-xs">
-                  <button
-                    onClick={() => setVideoView('list')}
-                    className={`px-2 py-1 ${
-                      videoView === 'list' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'
-                    }`}
-                    title="List view"
-                  >
-                    List
-                  </button>
-                  <button
-                    onClick={() => setVideoView('grid')}
-                    className={`px-2 py-1 border-l ${
-                      videoView === 'grid' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'
-                    }`}
-                    title="Grid view"
-                  >
-                    Grid
-                  </button>
-                </div>
-              </div>
-          {filtered.length === 0 ? (
-            <p className="text-sm text-slate-500 py-2">No videos match.</p>
-          ) : videoView === 'grid' ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {filtered.map((v) => {
-              const thumb = videoThumbs[v.source_video];
-              const pendingApproval = v.done - v.reviewed;
-              const inFlight = approvingVideo === v.source_video;
-              const pct = v.frames > 0 ? Math.round((v.done / v.frames) * 100) : 0;
-              return (
-                <div
-                  key={v.source_video}
-                  className="border rounded overflow-hidden bg-white flex flex-col"
-                >
-                  <div className="relative">
-                    {thumb ? (
-                      <img
-                        src={thumb}
-                        className="w-full aspect-video object-cover bg-slate-100"
-                        alt=""
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="w-full aspect-video bg-slate-100 flex items-center justify-center text-xs text-slate-400">
-                        no preview
-                      </div>
-                    )}
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent text-white text-xs px-2 py-1">
-                      <div className="font-mono truncate" title={v.source_video}>
-                        {v.source_video}
-                      </div>
-                      <div className="text-[10px] text-white/80 tabular-nums">
-                        {v.frames} frames · {v.done}/{v.frames} done
-                        {v.frames > 0 && ` · ${pct}%`}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="px-2 pt-2">
-                    <div className="h-2 bg-slate-100 rounded overflow-hidden flex">
-                      <div
-                        className="h-full bg-blue-500"
-                        style={{ width: `${v.frames > 0 ? (v.reviewed / v.frames) * 100 : 0}%` }}
-                        title={`${v.reviewed} reviewed`}
-                      />
-                      <div
-                        className="h-full bg-emerald-500"
-                        style={{ width: `${v.frames > 0 ? ((v.done - v.reviewed) / v.frames) * 100 : 0}%` }}
-                        title={`${v.done - v.reviewed} done, awaiting review`}
-                      />
-                    </div>
-                  </div>
-                  <div className="px-2 py-2 flex items-center gap-1">
-                    <select
-                      value={v.assigned_to ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        const assigneeId = raw === '' ? null : Number(raw);
-                        reassign.mutate({ source: v.source_video, assigneeId });
-                      }}
-                      className="border rounded px-2 py-1 text-xs flex-1 min-w-0"
-                    >
-                      <option value="">— unassigned —</option>
-                      {assignableOptions(usersQ.data ?? [], v.assigned_to).map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {userLabel(u)}
-                        </option>
-                      ))}
-                    </select>
-                    {pendingApproval > 0 && (
-                      <button
-                        onClick={() =>
-                          confirmDialog.ask({
-                            title: 'Approve all done frames?',
-                            message: `Mark all ${pendingApproval} done frames in "${v.source_video}" as reviewed. Frames already reviewed are skipped.`,
-                            confirmLabel: 'Approve all',
-                            onConfirm: () => approveAllMut.mutate(v.source_video),
-                          })
-                        }
-                        disabled={inFlight}
-                        className="text-emerald-600 hover:text-emerald-800 p-1 disabled:opacity-40"
-                        title={`Approve all ${pendingApproval} done frames as reviewed`}
-                        aria-label="Approve all done frames in this video"
-                      >
-                        {inFlight ? (
-                          <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" />
-                            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-                          </svg>
-                        ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </button>
-                    )}
-                    <RemoveAnnotatorButton
-                      sourceVideo={v.source_video}
-                      holders={holdersOf(v.source_video)}
-                      users={usersQ.data ?? []}
-                      inFlight={releasingVideo === v.source_video}
-                      disabled={releaseFrom.isPending}
-                      onRemove={({ annotatorId, includeFinished }) =>
-                        releaseFrom.mutate({
-                          source: v.source_video,
-                          annotatorId,
-                          includeFinished,
-                        })
-                      }
-                    />
-                    <SplitVideoButton
-                      sourceVideo={v.source_video}
-                      unassigned={v.unassigned}
-                      users={assignableOptions(usersQ.data ?? [])}
-                      inFlight={splittingVideo === v.source_video}
-                      disabled={splitMut.isPending}
-                      onSplit={(assigneeIds) =>
-                        splitMut.mutate({ source: v.source_video, assigneeIds })
-                      }
-                    />
-                    <VideoRotateButtons
-                      inFlight={rotatingVideo === v.source_video}
-                      disabled={rotateMut.isPending}
-                      onRotate={(degrees) =>
-                        confirmDialog.ask({
-                          title: 'Rotate video?',
-                          message: `Rotate all ${v.frames} frames of "${v.source_video}" by ${degrees}° and adjust their annotations. The frames are re-rendered.`,
-                          confirmLabel: 'Rotate',
-                          onConfirm: () => rotateMut.mutate({ source: v.source_video, degrees }),
-                        })
-                      }
-                    />
-                    <button
-                      onClick={() =>
-                        confirmDialog.ask({
-                          title: 'Delete video?',
-                          message: `"${v.source_video}" and all ${v.frames} extracted frames (plus their annotations) will be removed. This cannot be undone.`,
-                          confirmLabel: 'Delete video',
-                          tone: 'danger',
-                          requireTypedConfirmation: v.source_video,
-                          onConfirm: () => removeVideo.mutate(v.source_video),
-                        })
-                      }
-                      disabled={removeVideo.isPending}
-                      className="text-slate-400 hover:text-red-600 p-1 disabled:opacity-40"
-                      title="Delete video and all its frames"
-                      aria-label="Delete video"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M3 6h18" />
-                        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-                        <path d="M10 11v6" />
-                        <path d="M14 11v6" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          ) : (
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-slate-500 text-xs uppercase">
@@ -1899,7 +1666,7 @@ export default function ProjectDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((v) => {
+              {videos.map((v) => {
                 return (
                 <tr key={v.source_video} className="border-t">
                   <td className="py-2 font-mono truncate max-w-xs">{v.source_video}</td>
@@ -1983,11 +1750,11 @@ export default function ProjectDetailPage() {
                       users={usersQ.data ?? []}
                       inFlight={releasingVideo === v.source_video}
                       disabled={releaseFrom.isPending}
-                      onRemove={({ annotatorId, includeFinished }) =>
+                      onRemove={({ annotatorId, keepFinished }) =>
                         releaseFrom.mutate({
                           source: v.source_video,
                           annotatorId,
-                          includeFinished,
+                          keepFinished,
                         })
                       }
                     />
@@ -2056,7 +1823,7 @@ export default function ProjectDetailPage() {
             <tfoot>
               <tr className="border-t text-xs text-slate-500">
                 <td className="py-2 font-medium">
-                  {filtered.length} video{filtered.length === 1 ? '' : 's'}
+                  {videos.length} video{videos.length === 1 ? '' : 's'}
                 </td>
                 <td className="py-2 tabular-nums">{totals.frames}</td>
                 <td className="py-2 tabular-nums">
@@ -2069,7 +1836,6 @@ export default function ProjectDetailPage() {
             </tfoot>
           </table>
           </div>
-          )}
             </div>
           </details>
         </section>

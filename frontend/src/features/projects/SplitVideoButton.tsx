@@ -34,11 +34,10 @@ function blockSizes(total: number, n: number): number[] {
  * which is what makes this the safe follow-up to `RemoveAnnotatorButton`.
  *
  * The picker is a centred dialog rather than a popover anchored to the button.
- * Both places this control lives clip an absolutely-positioned child — the
- * list view's table sits in `overflow-x-auto` and the grid card in
- * `overflow-hidden` — so a popover was cut off at the section edge. The dialog
- * escapes both, and is user-resizable (`resize` + a non-visible `overflow`)
- * because a project can have far more annotators than fit a fixed box.
+ * The row sits in a table wrapped in `overflow-x-auto`, which clipped a
+ * popover at the section edge. The dialog escapes that, and is user-resizable
+ * (`resize` + a non-visible `overflow`) because a project can have far more
+ * annotators than fit a fixed box.
  */
 export function SplitVideoButton({
   sourceVideo,
